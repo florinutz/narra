@@ -1,0 +1,5 @@
+---
+source: tests/handlers/query_handler.rs
+expression: error_message
+---
+Unknown entity type: invalid_type

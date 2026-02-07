@@ -1,0 +1,10 @@
+---
+source: tests/handlers/knowledge_handler.rs
+assertion_line: 635
+expression: error_message
+---
+Invalid character_id: Parse error: Unexpected end of file, expected :
+ --> [1:14]
+  |
+1 | invalid_format
+  |              ^

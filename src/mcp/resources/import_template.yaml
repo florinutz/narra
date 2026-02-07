@@ -1,0 +1,168 @@
+# Narra World Import Template
+# ============================
+# Use this template to bootstrap an entire story world from a single YAML file.
+# All sections are optional — include only what you need.
+#
+# Import order (dependency-safe):
+#   characters → locations → events → scenes → relationships → knowledge → notes → facts
+#
+# ID conventions:
+#   - Use short, lowercase slugs (e.g. "alice", "castle", "betrayal")
+#   - IDs become SurrealDB record keys (character:alice, location:castle, etc.)
+#   - If omitted, IDs are auto-generated
+#
+# Conflict resolution (on_conflict):
+#   - error (default): report error for duplicates, continue with rest
+#   - skip: silently skip duplicates
+#   - update: merge imported fields into existing entities
+
+characters:
+  - id: alice
+    name: Alice Ashford
+    role: protagonist
+    aliases:
+      - The Shadow
+      - Lady Ashford
+    description: A cunning noblewoman with a hidden past
+    profile:
+      wound:
+        - Abandoned by her father at age twelve
+      desire_conscious:
+        - Restore her family's honor
+      desire_unconscious:
+        - Find someone she can trust completely
+      secret:
+        - She can read the ancient glyphs
+
+  - id: bob
+    name: Bob Blackwood
+    role: antagonist
+    description: A charming merchant lord with dangerous ambitions
+
+locations:
+  # Parents must appear before children in this list
+  - id: kingdom
+    name: The Northern Kingdom
+    description: A vast realm of forests and mountains
+
+  - id: castle
+    name: Castle Ashford
+    description: Ancient seat of House Ashford, perched on sea cliffs
+    parent_id: "location:kingdom"
+
+  - id: market
+    name: Blackwood Market
+    description: Bob's sprawling trade hub in the capital
+    parent_id: "location:kingdom"
+
+events:
+  - id: arrival
+    title: Alice Returns Home
+    description: After years abroad, Alice arrives at Castle Ashford
+    sequence: 10
+    # Optional: date in RFC3339 format
+    # date: "2024-01-15T00:00:00Z"
+    # date_precision: day
+
+  - id: betrayal
+    title: The Betrayal at the Market
+    description: Bob's true allegiance is revealed during a trade negotiation
+    sequence: 20
+
+scenes:
+  - id: homecoming
+    title: The Homecoming
+    event_id: "event:arrival"
+    location_id: "location:castle"
+    summary: Alice sees the castle for the first time in years
+    participants:
+      - character_id: alice
+        role: pov
+        notes: Narrating character for this scene
+      - character_id: bob
+        role: supporting
+
+  - id: confrontation
+    title: Market Confrontation
+    event_id: "event:betrayal"
+    location_id: "location:market"
+    summary: The truth comes out during negotiations
+    secondary_locations:
+      - "location:castle"
+    participants:
+      - character_id: alice
+        role: protagonist
+      - character_id: bob
+        role: antagonist
+
+relationships:
+  - from_character_id: alice
+    to_character_id: bob
+    rel_type: rivalry
+    label: Political rivals with mutual respect
+
+  - from_character_id: bob
+    to_character_id: alice
+    rel_type: professional
+    subtype: trade_partner
+    label: Former business associates
+
+knowledge:
+  # Knowledge is always appended (no conflict check)
+  # certainty: knows, suspects, believes_wrongly, uncertain, assumes, denies, forgotten
+  # method: told, overheard, witnessed, discovered, deduced, read, remembered, initial
+  - character_id: "character:alice"
+    target_id: "character:bob"
+    fact: Bob has been smuggling weapons through his trade routes
+    certainty: suspects
+    method: overheard
+    event_id: betrayal
+
+  - character_id: "character:bob"
+    target_id: "character:alice"
+    fact: Alice can read the ancient glyphs
+    certainty: knows
+    method: witnessed
+    event_id: arrival
+
+notes:
+  - id: worldbuilding_magic
+    title: Magic System Notes
+    body: |
+      The ancient glyphs are remnants of a pre-human civilization.
+      Only those with "the sight" can read them. The ability is
+      hereditary but skips generations unpredictably.
+    attach_to:
+      - "character:alice"
+
+  - id: plot_thread_smuggling
+    title: Smuggling Plot Thread
+    body: |
+      Bob's smuggling operation is the central mystery of Act 2.
+      Alice must discover the extent of the network before the
+      kingdom summit in Act 3.
+    attach_to:
+      - "character:bob"
+      - "event:betrayal"
+
+facts:
+  - id: no_flight
+    title: No Flying Magic
+    description: No form of magic in this world enables flight or levitation
+    categories:
+      - physics_magic
+    enforcement_level: strict
+    applies_to:
+      - entity_id: "character:alice"
+        link_type: manual
+
+  - id: trade_law
+    title: Royal Trade Monopoly
+    description: All cross-border trade must be licensed by the Crown
+    categories:
+      - social_cultural
+    enforcement_level: warning
+    applies_to:
+      - entity_id: "character:bob"
+        link_type: manual
+        confidence: 0.9

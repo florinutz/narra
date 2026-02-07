@@ -1,0 +1,9 @@
+---
+source: tests/handlers/mutate_handler.rs
+expression: error_message
+---
+Invalid event_id: Parse error: Unexpected token `-`, expected :
+ --> [1:4]
+  |
+1 | not-a-valid-record-id
+  |    ^

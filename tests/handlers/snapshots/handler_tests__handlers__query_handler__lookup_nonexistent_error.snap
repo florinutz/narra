@@ -1,0 +1,5 @@
+---
+source: tests/handlers/query_handler.rs
+expression: error_message
+---
+Entity not found: character:nonexistent

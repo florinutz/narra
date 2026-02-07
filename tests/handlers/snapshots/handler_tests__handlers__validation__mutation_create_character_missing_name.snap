@@ -1,0 +1,5 @@
+---
+source: tests/handlers/validation.rs
+expression: error_msg
+---
+missing field `name`

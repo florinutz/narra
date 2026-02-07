@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(gh *)",
+      "Bash(cargo build *)",
+      "Bash(cargo test *)",
+      "Bash(cargo clippy *)",
+      "Bash(cargo fmt *)",
+      "Bash(cargo machete *)",
+      "Bash(make quick-check)",
+      "Bash(make test)",
+      "Bash(make test-embedding)",
+      "Bash(make test-full)",
+      "Bash(make lint)",
+      "Bash(make machete)"
+    ],
+    "deny": [
+      "Bash(git push *)",
+      "Bash(git commit *)"
+    ]
+  }
+}

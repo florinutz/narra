@@ -1,0 +1,5 @@
+---
+source: tests/handlers/validation.rs
+expression: error_msg
+---
+invalid type: integer `12345`, expected a string

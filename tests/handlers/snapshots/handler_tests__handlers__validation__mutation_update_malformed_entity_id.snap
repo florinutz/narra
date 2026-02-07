@@ -1,0 +1,9 @@
+---
+source: tests/handlers/validation.rs
+expression: error_msg
+---
+Consistency check failed: Database error: Parse error: Unexpected end of file, expected an expression
+ --> [1:61]
+  |
+1 | ...#invalid###
+  |              ^

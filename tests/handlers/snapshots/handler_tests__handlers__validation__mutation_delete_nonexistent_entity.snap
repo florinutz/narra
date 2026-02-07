@@ -1,0 +1,5 @@
+---
+source: tests/handlers/validation.rs
+expression: error_msg
+---
+Soft delete not yet implemented. Use hard=true to permanently delete.

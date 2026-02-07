@@ -1,0 +1,5 @@
+---
+source: tests/handlers/validation.rs
+expression: error_msg
+---
+Entity not found: not-a-valid-record-id

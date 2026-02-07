@@ -1,0 +1,5 @@
+---
+source: tests/handlers/mutate_handler.rs
+expression: error_message
+---
+Soft delete not yet implemented. Use hard=true to permanently delete.

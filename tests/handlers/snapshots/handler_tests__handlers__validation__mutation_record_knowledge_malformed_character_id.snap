@@ -1,0 +1,9 @@
+---
+source: tests/handlers/validation.rs
+expression: error_msg
+---
+Invalid character_id: Parse error: Unexpected token `-`, expected :
+ --> [1:4]
+  |
+1 | bad-id-format
+  |    ^

@@ -1,0 +1,7 @@
+/target/
+/.fastembed_cache/
+/.idea/
+*.swp
+*.swo
+*~
+.DS_Store
