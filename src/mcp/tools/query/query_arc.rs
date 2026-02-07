@@ -150,11 +150,11 @@ impl NarraServer {
         // Fetch snapshots for both entities
         let order = if window.is_some() { "DESC" } else { "ASC" };
         let query_a = format!(
-            "SELECT embedding FROM arc_snapshot WHERE entity_id = {} ORDER BY created_at {}{}",
+            "SELECT embedding, created_at FROM arc_snapshot WHERE entity_id = {} ORDER BY created_at {}{}",
             entity_id_a, order, limit_clause
         );
         let query_b = format!(
-            "SELECT embedding FROM arc_snapshot WHERE entity_id = {} ORDER BY created_at {}{}",
+            "SELECT embedding, created_at FROM arc_snapshot WHERE entity_id = {} ORDER BY created_at {}{}",
             entity_id_b, order, limit_clause
         );
 

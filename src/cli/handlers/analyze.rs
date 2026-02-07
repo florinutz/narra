@@ -370,11 +370,11 @@ pub async fn handle_arc_drift(
     for entity in &filtered {
         // Fetch first and last embeddings
         let q_first = format!(
-            "SELECT embedding FROM arc_snapshot WHERE entity_id = {} ORDER BY created_at ASC LIMIT 1",
+            "SELECT embedding, created_at FROM arc_snapshot WHERE entity_id = {} ORDER BY created_at ASC LIMIT 1",
             entity.entity_id
         );
         let q_last = format!(
-            "SELECT embedding FROM arc_snapshot WHERE entity_id = {} ORDER BY created_at DESC LIMIT 1",
+            "SELECT embedding, created_at FROM arc_snapshot WHERE entity_id = {} ORDER BY created_at DESC LIMIT 1",
             entity.entity_id
         );
 
