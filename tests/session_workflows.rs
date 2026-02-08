@@ -367,7 +367,7 @@ async fn test_context_scoring() {
     // Get context mentioning Charlie
     let context = context_service
         .get_context(
-            &[charlie_id.clone()], // Mention Charlie
+            std::slice::from_ref(&charlie_id), // Mention Charlie
             ContextConfig::default(),
         )
         .await

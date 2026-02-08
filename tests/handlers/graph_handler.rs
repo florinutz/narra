@@ -6,34 +6,15 @@
 //! - Scope parsing for "full" and "character:ID" formats
 //! - Error handling for invalid inputs
 
-use std::sync::Arc;
-
-use narra::embedding::{EmbeddingService, NoopEmbeddingService};
 use narra::mcp::tools::graph::GraphRequest;
-use narra::mcp::{NarraServer, QueryRequest};
+use narra::mcp::QueryRequest;
 use narra::models::perception::{create_perception, PerceptionCreate};
 use narra::models::relationship::{create_relationship, RelationshipCreate};
 use narra::repository::{EntityRepository, SurrealEntityRepository};
-use narra::session::SessionStateManager;
 use rmcp::handler::server::wrapper::Parameters;
 
 use crate::common::builders::CharacterBuilder;
 use crate::common::harness::TestHarness;
-
-/// Helper to create NarraServer with isolated harness.
-async fn create_test_server(harness: &TestHarness) -> NarraServer {
-    let session_path = harness.temp_path().join("session.json");
-    let session_manager = Arc::new(
-        SessionStateManager::load_or_create(&session_path)
-            .expect("Failed to create session manager"),
-    );
-    NarraServer::new(
-        harness.db.clone(),
-        session_manager,
-        Arc::new(NoopEmbeddingService::new()),
-    )
-    .await
-}
 
 // ============================================================================
 // GRAPH TRAVERSAL TESTS
@@ -69,15 +50,7 @@ async fn test_graph_traversal_success() {
     .await
     .expect("Relationship created");
 
-    // Create server
-    let session_path = harness.temp_path().join("session.json");
-    let session_manager = Arc::new(SessionStateManager::load_or_create(&session_path).unwrap());
-    let server = NarraServer::new(
-        harness.db.clone(),
-        session_manager,
-        Arc::new(NoopEmbeddingService::new()),
-    )
-    .await;
+    let server = crate::common::create_test_server(&harness).await;
 
     // Traverse graph from Alice
     let request = QueryRequest::GraphTraversal {
@@ -96,7 +69,7 @@ async fn test_graph_traversal_success() {
         !response.results.is_empty(),
         "Should find connected entities"
     );
-    assert!(response.hints.len() >= 1, "Should include helpful hints");
+    assert!(!response.hints.is_empty(), "Should include helpful hints");
 
     // Check that Bob is in results
     let has_bob = response
@@ -154,15 +127,7 @@ async fn test_graph_traversal_depth_1() {
     .await
     .expect("Bob->Charlie");
 
-    // Create server
-    let session_path = harness.temp_path().join("session.json");
-    let session_manager = Arc::new(SessionStateManager::load_or_create(&session_path).unwrap());
-    let server = NarraServer::new(
-        harness.db.clone(),
-        session_manager,
-        Arc::new(NoopEmbeddingService::new()),
-    )
-    .await;
+    let server = crate::common::create_test_server(&harness).await;
 
     // Traverse from Alice with depth=1
     let request = QueryRequest::GraphTraversal {
@@ -254,15 +219,7 @@ async fn test_graph_traversal_depth_2() {
     .await
     .expect("Charlie->David");
 
-    // Create server
-    let session_path = harness.temp_path().join("session.json");
-    let session_manager = Arc::new(SessionStateManager::load_or_create(&session_path).unwrap());
-    let server = NarraServer::new(
-        harness.db.clone(),
-        session_manager,
-        Arc::new(NoopEmbeddingService::new()),
-    )
-    .await;
+    let server = crate::common::create_test_server(&harness).await;
 
     // Traverse from Alice with depth=2
     let request = QueryRequest::GraphTraversal {
@@ -310,15 +267,7 @@ async fn test_graph_traversal_no_connections() {
         .await
         .expect("Lonely");
 
-    // Create server
-    let session_path = harness.temp_path().join("session.json");
-    let session_manager = Arc::new(SessionStateManager::load_or_create(&session_path).unwrap());
-    let server = NarraServer::new(
-        harness.db.clone(),
-        session_manager,
-        Arc::new(NoopEmbeddingService::new()),
-    )
-    .await;
+    let server = crate::common::create_test_server(&harness).await;
 
     // Traverse from isolated character
     let request = QueryRequest::GraphTraversal {
@@ -345,15 +294,7 @@ async fn test_graph_traversal_no_connections() {
 async fn test_graph_traversal_nonexistent_entity() {
     let harness = TestHarness::new().await;
 
-    // Create server (no entities created)
-    let session_path = harness.temp_path().join("session.json");
-    let session_manager = Arc::new(SessionStateManager::load_or_create(&session_path).unwrap());
-    let server = NarraServer::new(
-        harness.db.clone(),
-        session_manager,
-        Arc::new(NoopEmbeddingService::new()),
-    )
-    .await;
+    let server = crate::common::create_test_server(&harness).await;
 
     // Traverse from nonexistent entity
     let request = QueryRequest::GraphTraversal {
@@ -416,15 +357,7 @@ async fn test_generate_graph_full_network() {
     .await
     .expect("Alice->Bob perception");
 
-    // Create server
-    let session_path = harness.temp_path().join("session.json");
-    let session_manager = Arc::new(SessionStateManager::load_or_create(&session_path).unwrap());
-    let server = NarraServer::new(
-        harness.db.clone(),
-        session_manager,
-        Arc::new(NoopEmbeddingService::new()),
-    )
-    .await;
+    let server = crate::common::create_test_server(&harness).await;
 
     // Generate full network graph with unique filename
     let request = GraphRequest {
@@ -521,15 +454,7 @@ async fn test_generate_graph_character_centered() {
     .await
     .expect("Near->Far");
 
-    // Create server
-    let session_path = harness.temp_path().join("session.json");
-    let session_manager = Arc::new(SessionStateManager::load_or_create(&session_path).unwrap());
-    let server = NarraServer::new(
-        harness.db.clone(),
-        session_manager,
-        Arc::new(NoopEmbeddingService::new()),
-    )
-    .await;
+    let server = crate::common::create_test_server(&harness).await;
 
     // Generate character-centered graph with depth=1
     let request = GraphRequest {
@@ -569,15 +494,7 @@ async fn test_generate_graph_character_centered() {
 async fn test_generate_graph_invalid_scope() {
     let harness = TestHarness::new().await;
 
-    // Create server
-    let session_path = harness.temp_path().join("session.json");
-    let session_manager = Arc::new(SessionStateManager::load_or_create(&session_path).unwrap());
-    let server = NarraServer::new(
-        harness.db.clone(),
-        session_manager,
-        Arc::new(NoopEmbeddingService::new()),
-    )
-    .await;
+    let server = crate::common::create_test_server(&harness).await;
 
     // Try invalid scope format
     let request = GraphRequest {
@@ -625,15 +542,7 @@ async fn test_generate_graph_with_roles() {
         .await
         .expect("Detective");
 
-    // Create server
-    let session_path = harness.temp_path().join("session.json");
-    let session_manager = Arc::new(SessionStateManager::load_or_create(&session_path).unwrap());
-    let server = NarraServer::new(
-        harness.db.clone(),
-        session_manager,
-        Arc::new(NoopEmbeddingService::new()),
-    )
-    .await;
+    let server = crate::common::create_test_server(&harness).await;
 
     // Generate graph with roles
     let request = GraphRequest {
@@ -675,15 +584,7 @@ async fn test_generate_graph_custom_filename() {
         .await
         .expect("Alice");
 
-    // Create server
-    let session_path = harness.temp_path().join("session.json");
-    let session_manager = Arc::new(SessionStateManager::load_or_create(&session_path).unwrap());
-    let server = NarraServer::new(
-        harness.db.clone(),
-        session_manager,
-        Arc::new(NoopEmbeddingService::new()),
-    )
-    .await;
+    let server = crate::common::create_test_server(&harness).await;
 
     let custom_name = "my_custom_graph_filename.md";
 
@@ -754,15 +655,7 @@ async fn test_generate_graph_response_fields() {
     .await
     .expect("Alice->Bob");
 
-    // Create server
-    let session_path = harness.temp_path().join("session.json");
-    let session_manager = Arc::new(SessionStateManager::load_or_create(&session_path).unwrap());
-    let server = NarraServer::new(
-        harness.db.clone(),
-        session_manager,
-        Arc::new(NoopEmbeddingService::new()),
-    )
-    .await;
+    let server = crate::common::create_test_server(&harness).await;
 
     let request = GraphRequest {
         scope: "full".to_string(),
@@ -827,15 +720,7 @@ async fn test_graph_traversal_response_structure() {
     .await
     .expect("Relationship");
 
-    // Create server
-    let session_path = harness.temp_path().join("session.json");
-    let session_manager = Arc::new(SessionStateManager::load_or_create(&session_path).unwrap());
-    let server = NarraServer::new(
-        harness.db.clone(),
-        session_manager,
-        Arc::new(NoopEmbeddingService::new()),
-    )
-    .await;
+    let server = crate::common::create_test_server(&harness).await;
 
     let request = QueryRequest::GraphTraversal {
         entity_id: format!("character:{}", alice.id.key()),

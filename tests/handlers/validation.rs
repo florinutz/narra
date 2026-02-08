@@ -7,14 +7,9 @@ use crate::common::builders::CharacterBuilder;
 use crate::common::harness::TestHarness;
 
 use insta::assert_snapshot;
-use narra::embedding::{EmbeddingService, NoopEmbeddingService};
 use narra::mcp::types::{MutationRequest, QueryRequest};
-use narra::mcp::NarraServer;
 use narra::repository::{EntityRepository, SurrealEntityRepository};
-use narra::session::SessionStateManager;
 use rmcp::handler::server::wrapper::Parameters;
-use std::sync::Arc;
-use tempfile::TempDir;
 
 // ============================================================================
 // MISSING REQUIRED FIELDS TESTS
@@ -128,17 +123,7 @@ fn test_mutation_create_event_wrong_type_sequence() {
 #[tokio::test]
 async fn test_query_lookup_malformed_id() {
     let harness = TestHarness::new().await;
-    let temp_dir = TempDir::new().expect("Temp dir");
-    let session_path = temp_dir.path().join("session.json");
-
-    let session_manager =
-        Arc::new(SessionStateManager::load_or_create(&session_path).expect("Session manager"));
-    let server = NarraServer::new(
-        harness.db.clone(),
-        session_manager,
-        Arc::new(NoopEmbeddingService::new()),
-    )
-    .await;
+    let server = crate::common::create_test_server(&harness).await;
 
     // Malformed ID (not table:key format)
     let request = QueryRequest::Lookup {
@@ -157,17 +142,7 @@ async fn test_query_lookup_malformed_id() {
 #[tokio::test]
 async fn test_mutation_update_malformed_entity_id() {
     let harness = TestHarness::new().await;
-    let temp_dir = TempDir::new().expect("Temp dir");
-    let session_path = temp_dir.path().join("session.json");
-
-    let session_manager =
-        Arc::new(SessionStateManager::load_or_create(&session_path).expect("Session manager"));
-    let server = NarraServer::new(
-        harness.db.clone(),
-        session_manager,
-        Arc::new(NoopEmbeddingService::new()),
-    )
-    .await;
+    let server = crate::common::create_test_server(&harness).await;
 
     let request = MutationRequest::Update {
         entity_id: "###invalid###".to_string(),
@@ -188,17 +163,7 @@ async fn test_mutation_update_malformed_entity_id() {
 #[tokio::test]
 async fn test_mutation_record_knowledge_malformed_character_id() {
     let harness = TestHarness::new().await;
-    let temp_dir = TempDir::new().expect("Temp dir");
-    let session_path = temp_dir.path().join("session.json");
-
-    let session_manager =
-        Arc::new(SessionStateManager::load_or_create(&session_path).expect("Session manager"));
-    let server = NarraServer::new(
-        harness.db.clone(),
-        session_manager,
-        Arc::new(NoopEmbeddingService::new()),
-    )
-    .await;
+    let server = crate::common::create_test_server(&harness).await;
 
     let request = MutationRequest::RecordKnowledge {
         character_id: "bad-id-format".to_string(),
@@ -231,17 +196,7 @@ async fn test_mutation_record_knowledge_malformed_character_id() {
 #[tokio::test]
 async fn test_query_lookup_nonexistent_entity() {
     let harness = TestHarness::new().await;
-    let temp_dir = TempDir::new().expect("Temp dir");
-    let session_path = temp_dir.path().join("session.json");
-
-    let session_manager =
-        Arc::new(SessionStateManager::load_or_create(&session_path).expect("Session manager"));
-    let server = NarraServer::new(
-        harness.db.clone(),
-        session_manager,
-        Arc::new(NoopEmbeddingService::new()),
-    )
-    .await;
+    let server = crate::common::create_test_server(&harness).await;
 
     // Valid format but doesn't exist
     let request = QueryRequest::Lookup {
@@ -260,17 +215,7 @@ async fn test_query_lookup_nonexistent_entity() {
 #[tokio::test]
 async fn test_mutation_delete_nonexistent_entity() {
     let harness = TestHarness::new().await;
-    let temp_dir = TempDir::new().expect("Temp dir");
-    let session_path = temp_dir.path().join("session.json");
-
-    let session_manager =
-        Arc::new(SessionStateManager::load_or_create(&session_path).expect("Session manager"));
-    let server = NarraServer::new(
-        harness.db.clone(),
-        session_manager,
-        Arc::new(NoopEmbeddingService::new()),
-    )
-    .await;
+    let server = crate::common::create_test_server(&harness).await;
 
     // Valid format but doesn't exist
     let request = MutationRequest::Delete {
@@ -296,17 +241,7 @@ async fn test_mutation_delete_nonexistent_entity() {
 #[tokio::test]
 async fn test_query_search_negative_limit() {
     let harness = TestHarness::new().await;
-    let temp_dir = TempDir::new().expect("Temp dir");
-    let session_path = temp_dir.path().join("session.json");
-
-    let session_manager =
-        Arc::new(SessionStateManager::load_or_create(&session_path).expect("Session manager"));
-    let server = NarraServer::new(
-        harness.db.clone(),
-        session_manager,
-        Arc::new(NoopEmbeddingService::new()),
-    )
-    .await;
+    let server = crate::common::create_test_server(&harness).await;
 
     // Note: limit is usize, so negative values in JSON will fail deserialization.
     // This tests the handler's behavior with boundary values.
@@ -321,16 +256,17 @@ async fn test_query_search_negative_limit() {
 
     // Zero limit might be valid (return empty results) or error
     // This test documents actual behavior
-    if response.is_err() {
-        let error_msg = response.unwrap_err();
-        assert_snapshot!("query_search_zero_limit_error", error_msg);
-    } else {
-        // If it succeeds, verify empty results
-        let result = response.unwrap();
-        assert!(
-            result.results.is_empty(),
-            "Zero limit should return empty results"
-        );
+    match response {
+        Err(error_msg) => {
+            assert_snapshot!("query_search_zero_limit_error", error_msg);
+        }
+        Ok(result) => {
+            // If it succeeds, verify empty results
+            assert!(
+                result.results.is_empty(),
+                "Zero limit should return empty results"
+            );
+        }
     }
 }
 
@@ -338,8 +274,6 @@ async fn test_query_search_negative_limit() {
 #[tokio::test]
 async fn test_query_graph_traversal_zero_depth() {
     let harness = TestHarness::new().await;
-    let temp_dir = TempDir::new().expect("Temp dir");
-    let session_path = temp_dir.path().join("session.json");
 
     let entity_repo = SurrealEntityRepository::new(harness.db.clone());
 
@@ -350,14 +284,7 @@ async fn test_query_graph_traversal_zero_depth() {
         .expect("Create Alice");
     let alice_id = format!("character:{}", alice.id.key());
 
-    let session_manager =
-        Arc::new(SessionStateManager::load_or_create(&session_path).expect("Session manager"));
-    let server = NarraServer::new(
-        harness.db.clone(),
-        session_manager,
-        Arc::new(NoopEmbeddingService::new()),
-    )
-    .await;
+    let server = crate::common::create_test_server(&harness).await;
 
     // Zero depth - edge case
     let request = QueryRequest::GraphTraversal {
@@ -370,15 +297,16 @@ async fn test_query_graph_traversal_zero_depth() {
 
     // Zero depth might return just the starting entity or error
     // This test documents actual behavior
-    if response.is_err() {
-        let error_msg = response.unwrap_err();
-        assert_snapshot!("query_graph_traversal_zero_depth_error", error_msg);
-    } else {
-        let result = response.unwrap();
-        // With zero depth, should only return the starting entity or empty
-        assert!(
-            result.results.len() <= 1,
-            "Zero depth should return at most the starting entity"
-        );
+    match response {
+        Err(error_msg) => {
+            assert_snapshot!("query_graph_traversal_zero_depth_error", error_msg);
+        }
+        Ok(result) => {
+            // With zero depth, should only return the starting entity or empty
+            assert!(
+                result.results.len() <= 1,
+                "Zero depth should return at most the starting entity"
+            );
+        }
     }
 }

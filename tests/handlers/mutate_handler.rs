@@ -4,36 +4,17 @@
 //! protocol requests and service layer calls, returning properly formatted
 //! MutationResponse structures.
 
-use std::sync::Arc;
-
 use insta::assert_snapshot;
-use narra::embedding::{EmbeddingService, NoopEmbeddingService};
 use narra::mcp::{
-    CharacterSpec, DetailLevel, EventSpec, LocationSpec, MutationRequest, NarraServer,
-    QueryRequest, RelationshipSpec,
+    CharacterSpec, DetailLevel, EventSpec, LocationSpec, MutationRequest, QueryRequest,
+    RelationshipSpec,
 };
 use narra::repository::{EntityRepository, SurrealEntityRepository};
-use narra::session::SessionStateManager;
 use pretty_assertions::assert_eq;
 use rmcp::handler::server::wrapper::Parameters;
 
-use crate::common::builders::{CharacterBuilder, EventBuilder, LocationBuilder, SceneBuilder};
+use crate::common::builders::{CharacterBuilder, EventBuilder, LocationBuilder};
 use crate::common::harness::TestHarness;
-
-/// Helper to create NarraServer with isolated harness.
-async fn create_test_server(harness: &TestHarness) -> NarraServer {
-    let session_path = harness.temp_path().join("session.json");
-    let session_manager = Arc::new(
-        SessionStateManager::load_or_create(&session_path)
-            .expect("Failed to create session manager"),
-    );
-    NarraServer::new(
-        harness.db.clone(),
-        session_manager,
-        Arc::new(NoopEmbeddingService::new()),
-    )
-    .await
-}
 
 // =============================================================================
 // CHARACTER CRUD
@@ -48,7 +29,7 @@ async fn create_test_server(harness: &TestHarness) -> NarraServer {
 #[tokio::test]
 async fn test_create_character_success() {
     let harness = TestHarness::new().await;
-    let server = create_test_server(&harness).await;
+    let server = crate::common::create_test_server(&harness).await;
 
     let request = MutationRequest::CreateCharacter {
         id: None,
@@ -85,7 +66,7 @@ async fn test_create_character_success() {
 #[tokio::test]
 async fn test_create_character_with_aliases() {
     let harness = TestHarness::new().await;
-    let server = create_test_server(&harness).await;
+    let server = crate::common::create_test_server(&harness).await;
 
     let request = MutationRequest::CreateCharacter {
         id: None,
@@ -124,7 +105,7 @@ async fn test_create_character_with_aliases() {
 #[tokio::test]
 async fn test_delete_character_hard() {
     let harness = TestHarness::new().await;
-    let server = create_test_server(&harness).await;
+    let server = crate::common::create_test_server(&harness).await;
 
     // Create character first
     let create_request = MutationRequest::CreateCharacter {
@@ -176,7 +157,7 @@ async fn test_delete_character_hard() {
 #[tokio::test]
 async fn test_create_location_success() {
     let harness = TestHarness::new().await;
-    let server = create_test_server(&harness).await;
+    let server = crate::common::create_test_server(&harness).await;
 
     let request = MutationRequest::CreateLocation {
         id: None,
@@ -200,7 +181,7 @@ async fn test_create_location_success() {
 #[tokio::test]
 async fn test_create_location_with_parent() {
     let harness = TestHarness::new().await;
-    let server = create_test_server(&harness).await;
+    let server = crate::common::create_test_server(&harness).await;
 
     // Create parent location first
     let parent_request = MutationRequest::CreateLocation {
@@ -248,7 +229,7 @@ async fn test_create_location_with_parent() {
 #[tokio::test]
 async fn test_delete_location_hard() {
     let harness = TestHarness::new().await;
-    let server = create_test_server(&harness).await;
+    let server = crate::common::create_test_server(&harness).await;
 
     // Create location
     let create_request = MutationRequest::CreateLocation {
@@ -291,7 +272,7 @@ async fn test_delete_location_hard() {
 #[tokio::test]
 async fn test_create_event_success() {
     let harness = TestHarness::new().await;
-    let server = create_test_server(&harness).await;
+    let server = crate::common::create_test_server(&harness).await;
 
     let request = MutationRequest::CreateEvent {
         id: None,
@@ -315,7 +296,7 @@ async fn test_create_event_success() {
 #[tokio::test]
 async fn test_create_event_with_date() {
     let harness = TestHarness::new().await;
-    let server = create_test_server(&harness).await;
+    let server = crate::common::create_test_server(&harness).await;
 
     let request = MutationRequest::CreateEvent {
         id: None,
@@ -346,7 +327,7 @@ async fn test_create_event_with_date() {
 #[tokio::test]
 async fn test_delete_event_hard() {
     let harness = TestHarness::new().await;
-    let server = create_test_server(&harness).await;
+    let server = crate::common::create_test_server(&harness).await;
 
     // Create event
     let create_request = MutationRequest::CreateEvent {
@@ -391,7 +372,7 @@ async fn test_delete_event_hard() {
 #[tokio::test]
 async fn test_create_scene_success() {
     let harness = TestHarness::new().await;
-    let server = create_test_server(&harness).await;
+    let server = crate::common::create_test_server(&harness).await;
 
     // Create prerequisite event and location
     let repo = SurrealEntityRepository::new(harness.db.clone());
@@ -428,7 +409,7 @@ async fn test_create_scene_success() {
 #[tokio::test]
 async fn test_create_scene_malformed_event_id() {
     let harness = TestHarness::new().await;
-    let server = create_test_server(&harness).await;
+    let server = crate::common::create_test_server(&harness).await;
 
     // Create location but use malformed event ID (not valid RecordId format)
     let repo = SurrealEntityRepository::new(harness.db.clone());
@@ -465,7 +446,7 @@ async fn test_create_scene_malformed_event_id() {
 #[tokio::test]
 async fn test_delete_nonexistent_entity() {
     let harness = TestHarness::new().await;
-    let server = create_test_server(&harness).await;
+    let server = crate::common::create_test_server(&harness).await;
 
     let request = MutationRequest::Delete {
         entity_id: "character:nonexistent123".to_string(),
@@ -475,8 +456,7 @@ async fn test_delete_nonexistent_entity() {
 
     // Note: The current implementation may succeed silently for nonexistent entities
     // or may return an error. This test documents actual behavior.
-    if response.is_err() {
-        let error_message = response.unwrap_err();
+    if let Err(error_message) = response {
         assert_snapshot!("delete_nonexistent_error", error_message);
     }
     // If it succeeds, that's also valid behavior (idempotent delete)
@@ -488,7 +468,7 @@ async fn test_delete_nonexistent_entity() {
 #[tokio::test]
 async fn test_delete_soft_not_implemented() {
     let harness = TestHarness::new().await;
-    let server = create_test_server(&harness).await;
+    let server = crate::common::create_test_server(&harness).await;
 
     // Create character to attempt soft delete on
     let create_request = MutationRequest::CreateCharacter {
@@ -532,7 +512,7 @@ async fn test_delete_soft_not_implemented() {
 #[tokio::test]
 async fn test_created_entity_queryable() {
     let harness = TestHarness::new().await;
-    let server = create_test_server(&harness).await;
+    let server = crate::common::create_test_server(&harness).await;
 
     // Create character via mutate handler
     let create_request = MutationRequest::CreateCharacter {
@@ -572,7 +552,7 @@ async fn test_created_entity_queryable() {
 #[tokio::test]
 async fn test_batch_create_characters() {
     let harness = TestHarness::new().await;
-    let server = create_test_server(&harness).await;
+    let server = crate::common::create_test_server(&harness).await;
 
     let request = MutationRequest::BatchCreateCharacters {
         characters: vec![
@@ -626,7 +606,7 @@ async fn test_batch_create_characters() {
 #[tokio::test]
 async fn test_batch_create_characters_with_ids() {
     let harness = TestHarness::new().await;
-    let server = create_test_server(&harness).await;
+    let server = crate::common::create_test_server(&harness).await;
 
     let request = MutationRequest::BatchCreateCharacters {
         characters: vec![
@@ -673,7 +653,7 @@ async fn test_batch_create_characters_with_ids() {
 #[tokio::test]
 async fn test_create_character_with_id() {
     let harness = TestHarness::new().await;
-    let server = create_test_server(&harness).await;
+    let server = crate::common::create_test_server(&harness).await;
 
     let request = MutationRequest::CreateCharacter {
         id: Some("hero".to_string()),
@@ -696,7 +676,7 @@ async fn test_create_character_with_id() {
 #[tokio::test]
 async fn test_batch_create_locations() {
     let harness = TestHarness::new().await;
-    let server = create_test_server(&harness).await;
+    let server = crate::common::create_test_server(&harness).await;
 
     let request = MutationRequest::BatchCreateLocations {
         locations: vec![
@@ -732,7 +712,7 @@ async fn test_batch_create_locations() {
 #[tokio::test]
 async fn test_batch_create_events() {
     let harness = TestHarness::new().await;
-    let server = create_test_server(&harness).await;
+    let server = crate::common::create_test_server(&harness).await;
 
     let request = MutationRequest::BatchCreateEvents {
         events: vec![
@@ -770,7 +750,7 @@ async fn test_batch_create_events() {
 #[tokio::test]
 async fn test_batch_create_relationships() {
     let harness = TestHarness::new().await;
-    let server = create_test_server(&harness).await;
+    let server = crate::common::create_test_server(&harness).await;
 
     // Create characters first
     let repo = SurrealEntityRepository::new(harness.db.clone());
@@ -819,7 +799,7 @@ async fn test_batch_create_relationships() {
 #[tokio::test]
 async fn test_batch_mixed_ids() {
     let harness = TestHarness::new().await;
-    let server = create_test_server(&harness).await;
+    let server = crate::common::create_test_server(&harness).await;
 
     let request = MutationRequest::BatchCreateCharacters {
         characters: vec![

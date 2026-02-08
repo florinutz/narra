@@ -13,9 +13,7 @@ use std::sync::Arc;
 use common::harness::TestHarness;
 use narra::embedding::backfill::BackfillService;
 use narra::embedding::composite::knowledge_composite;
-use narra::embedding::{
-    EmbeddingConfig, LocalEmbeddingService, NoopEmbeddingService, StalenessManager,
-};
+use narra::embedding::{EmbeddingConfig, LocalEmbeddingService, NoopEmbeddingService};
 use narra::mcp::{MutationRequest, NarraServer, QueryRequest};
 use narra::models::character::{create_character, CharacterCreate};
 use narra::models::event::{create_event, EventCreate};

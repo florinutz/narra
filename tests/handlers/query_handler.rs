@@ -7,9 +7,7 @@
 use std::sync::Arc;
 
 use insta::assert_snapshot;
-use narra::embedding::{
-    EmbeddingConfig, EmbeddingService, LocalEmbeddingService, NoopEmbeddingService,
-};
+use narra::embedding::{EmbeddingConfig, EmbeddingService, LocalEmbeddingService};
 use narra::mcp::{DetailLevel, NarraServer, QueryRequest};
 use narra::repository::{EntityRepository, SurrealEntityRepository};
 use narra::session::SessionStateManager;
@@ -18,21 +16,6 @@ use rmcp::handler::server::wrapper::Parameters;
 
 use crate::common::builders::{CharacterBuilder, LocationBuilder};
 use crate::common::harness::TestHarness;
-
-/// Helper to create NarraServer with isolated harness.
-async fn create_test_server(harness: &TestHarness) -> NarraServer {
-    let session_path = harness.temp_path().join("session.json");
-    let session_manager = Arc::new(
-        SessionStateManager::load_or_create(&session_path)
-            .expect("Failed to create session manager"),
-    );
-    NarraServer::new(
-        harness.db.clone(),
-        session_manager,
-        Arc::new(NoopEmbeddingService::new()),
-    )
-    .await
-}
 
 // =============================================================================
 // LOOKUP OPERATIONS
@@ -48,7 +31,7 @@ async fn create_test_server(harness: &TestHarness) -> NarraServer {
 #[tokio::test]
 async fn test_lookup_character_success() {
     let harness = TestHarness::new().await;
-    let server = create_test_server(&harness).await;
+    let server = crate::common::create_test_server(&harness).await;
 
     // Create test character via repository
     let repo = SurrealEntityRepository::new(harness.db.clone());
@@ -89,7 +72,7 @@ async fn test_lookup_character_success() {
 #[tokio::test]
 async fn test_lookup_location_success() {
     let harness = TestHarness::new().await;
-    let server = create_test_server(&harness).await;
+    let server = crate::common::create_test_server(&harness).await;
 
     // Create test location via repository
     let repo = SurrealEntityRepository::new(harness.db.clone());
@@ -122,7 +105,7 @@ async fn test_lookup_location_success() {
 #[tokio::test]
 async fn test_lookup_nonexistent_entity() {
     let harness = TestHarness::new().await;
-    let server = create_test_server(&harness).await;
+    let server = crate::common::create_test_server(&harness).await;
 
     let request = QueryRequest::Lookup {
         entity_id: "character:nonexistent".to_string(),
@@ -153,7 +136,7 @@ async fn test_lookup_nonexistent_entity() {
 #[tokio::test]
 async fn test_search_by_name() {
     let harness = TestHarness::new().await;
-    let server = create_test_server(&harness).await;
+    let server = crate::common::create_test_server(&harness).await;
 
     // Create test characters via repository
     let repo = SurrealEntityRepository::new(harness.db.clone());
@@ -205,7 +188,7 @@ async fn test_search_by_name() {
 #[tokio::test]
 async fn test_search_pagination() {
     let harness = TestHarness::new().await;
-    let server = create_test_server(&harness).await;
+    let server = crate::common::create_test_server(&harness).await;
 
     // Create 25 characters for pagination testing
     let repo = SurrealEntityRepository::new(harness.db.clone());
@@ -270,7 +253,7 @@ async fn test_search_pagination() {
 #[tokio::test]
 async fn test_search_empty_results() {
     let harness = TestHarness::new().await;
-    let server = create_test_server(&harness).await;
+    let server = crate::common::create_test_server(&harness).await;
 
     let request = QueryRequest::Search {
         query: "NonexistentEntity12345".to_string(),
@@ -302,7 +285,7 @@ async fn test_search_empty_results() {
 #[tokio::test]
 async fn test_overview_characters() {
     let harness = TestHarness::new().await;
-    let server = create_test_server(&harness).await;
+    let server = crate::common::create_test_server(&harness).await;
 
     // Create test characters
     let repo = SurrealEntityRepository::new(harness.db.clone());
@@ -334,7 +317,7 @@ async fn test_overview_characters() {
 #[tokio::test]
 async fn test_overview_unknown_type() {
     let harness = TestHarness::new().await;
-    let server = create_test_server(&harness).await;
+    let server = crate::common::create_test_server(&harness).await;
 
     let request = QueryRequest::Overview {
         entity_type: "invalid_type".to_string(),
@@ -362,7 +345,7 @@ async fn test_overview_unknown_type() {
 #[tokio::test]
 async fn test_centrality_metrics() {
     let harness = TestHarness::new().await;
-    let server = create_test_server(&harness).await;
+    let server = crate::common::create_test_server(&harness).await;
 
     // Create test characters with relationships
     let repo = SurrealEntityRepository::new(harness.db.clone());
@@ -459,7 +442,7 @@ async fn test_centrality_metrics() {
 #[tokio::test]
 async fn test_influence_propagation() {
     let harness = TestHarness::new().await;
-    let server = create_test_server(&harness).await;
+    let server = crate::common::create_test_server(&harness).await;
 
     // Create test characters
     let repo = SurrealEntityRepository::new(harness.db.clone());
@@ -552,7 +535,7 @@ async fn test_influence_propagation() {
 #[tokio::test]
 async fn test_dramatic_irony_report() {
     let harness = TestHarness::new().await;
-    let server = create_test_server(&harness).await;
+    let server = crate::common::create_test_server(&harness).await;
 
     // Create test characters (knowledge asymmetries will be detected if present)
     let repo = SurrealEntityRepository::new(harness.db.clone());
@@ -575,9 +558,6 @@ async fn test_dramatic_irony_report() {
     // Verify success
     assert!(response.is_ok(), "Dramatic irony report should succeed");
     let response = response.unwrap();
-
-    // Verify response structure (may have 0 asymmetries if no knowledge recorded)
-    assert!(response.total >= 0, "Should have valid total count");
 
     // Should include hints about asymmetries
     assert!(!response.hints.is_empty(), "Should include hints");

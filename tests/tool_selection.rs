@@ -3,7 +3,7 @@
 //! These tests verify that tool/resource/prompt descriptions enable
 //! correct selection for common user intents.
 
-use narra::embedding::{EmbeddingService, NoopEmbeddingService};
+use narra::embedding::NoopEmbeddingService;
 use narra::mcp::NarraServer;
 use narra::session::SessionStateManager;
 use std::sync::Arc;
@@ -245,7 +245,7 @@ async fn test_context_budget_with_prompts() {
 
     // Estimate tokens: 4 chars per token
     fn estimate_tokens(text: &str) -> usize {
-        (text.len() + 3) / 4
+        text.len().div_ceil(4)
     }
 
     let info_json = serde_json::to_string(&info).unwrap();

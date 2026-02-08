@@ -6,36 +6,17 @@
 //!
 //! This covers HAND-02 requirements.
 
-use std::sync::Arc;
-
 use insta::assert_snapshot;
-use narra::embedding::{EmbeddingService, NoopEmbeddingService};
-use narra::mcp::{MutationRequest, NarraServer, QueryRequest};
+use narra::mcp::{MutationRequest, QueryRequest};
 use narra::models::{CertaintyLevel, LearningMethod};
 use narra::repository::{
     EntityRepository, KnowledgeRepository, SurrealEntityRepository, SurrealKnowledgeRepository,
 };
-use narra::session::SessionStateManager;
 use pretty_assertions::assert_eq;
 use rmcp::handler::server::wrapper::Parameters;
 
 use crate::common::builders::{CharacterBuilder, EventBuilder, LocationBuilder};
 use crate::common::harness::TestHarness;
-
-/// Helper to create NarraServer with isolated harness.
-async fn create_test_server(harness: &TestHarness) -> NarraServer {
-    let session_path = harness.temp_path().join("session.json");
-    let session_manager = Arc::new(
-        SessionStateManager::load_or_create(&session_path)
-            .expect("Failed to create session manager"),
-    );
-    NarraServer::new(
-        harness.db.clone(),
-        session_manager,
-        Arc::new(NoopEmbeddingService::new()),
-    )
-    .await
-}
 
 // =============================================================================
 // RECORD KNOWLEDGE - BASIC OPERATIONS
@@ -50,7 +31,7 @@ async fn create_test_server(harness: &TestHarness) -> NarraServer {
 #[tokio::test]
 async fn test_record_knowledge_success() {
     let harness = TestHarness::new().await;
-    let server = create_test_server(&harness).await;
+    let server = crate::common::create_test_server(&harness).await;
 
     // Create a character via repository
     let repo = SurrealEntityRepository::new(harness.db.clone());
@@ -103,7 +84,7 @@ async fn test_record_knowledge_success() {
 #[tokio::test]
 async fn test_record_knowledge_with_source_character() {
     let harness = TestHarness::new().await;
-    let server = create_test_server(&harness).await;
+    let server = crate::common::create_test_server(&harness).await;
 
     // Create characters
     let repo = SurrealEntityRepository::new(harness.db.clone());
@@ -166,7 +147,7 @@ async fn test_record_knowledge_with_source_character() {
 #[tokio::test]
 async fn test_record_knowledge_with_event() {
     let harness = TestHarness::new().await;
-    let server = create_test_server(&harness).await;
+    let server = crate::common::create_test_server(&harness).await;
 
     // Create character and event
     let repo = SurrealEntityRepository::new(harness.db.clone());
@@ -217,7 +198,7 @@ async fn test_record_knowledge_with_event() {
 #[tokio::test]
 async fn test_record_knowledge_certainty_knows() {
     let harness = TestHarness::new().await;
-    let server = create_test_server(&harness).await;
+    let server = crate::common::create_test_server(&harness).await;
 
     let repo = SurrealEntityRepository::new(harness.db.clone());
     let character = repo
@@ -252,7 +233,7 @@ async fn test_record_knowledge_certainty_knows() {
 #[tokio::test]
 async fn test_record_knowledge_certainty_suspects() {
     let harness = TestHarness::new().await;
-    let server = create_test_server(&harness).await;
+    let server = crate::common::create_test_server(&harness).await;
 
     let repo = SurrealEntityRepository::new(harness.db.clone());
     let character = repo
@@ -286,7 +267,7 @@ async fn test_record_knowledge_certainty_suspects() {
 #[tokio::test]
 async fn test_record_knowledge_certainty_believes_wrongly() {
     let harness = TestHarness::new().await;
-    let server = create_test_server(&harness).await;
+    let server = crate::common::create_test_server(&harness).await;
 
     let repo = SurrealEntityRepository::new(harness.db.clone());
     let character = repo
@@ -330,7 +311,7 @@ async fn test_record_knowledge_certainty_believes_wrongly() {
 #[tokio::test]
 async fn test_record_knowledge_certainty_unknown() {
     let harness = TestHarness::new().await;
-    let server = create_test_server(&harness).await;
+    let server = crate::common::create_test_server(&harness).await;
 
     let repo = SurrealEntityRepository::new(harness.db.clone());
     let character = repo
@@ -372,7 +353,7 @@ async fn test_record_knowledge_certainty_unknown() {
 #[tokio::test]
 async fn test_record_knowledge_method_told() {
     let harness = TestHarness::new().await;
-    let server = create_test_server(&harness).await;
+    let server = crate::common::create_test_server(&harness).await;
 
     let repo = SurrealEntityRepository::new(harness.db.clone());
     let alice = repo
@@ -414,7 +395,7 @@ async fn test_record_knowledge_method_told() {
 #[tokio::test]
 async fn test_record_knowledge_method_witnessed() {
     let harness = TestHarness::new().await;
-    let server = create_test_server(&harness).await;
+    let server = crate::common::create_test_server(&harness).await;
 
     let repo = SurrealEntityRepository::new(harness.db.clone());
     let character = repo
@@ -452,7 +433,7 @@ async fn test_record_knowledge_method_witnessed() {
 #[tokio::test]
 async fn test_record_knowledge_method_deduced() {
     let harness = TestHarness::new().await;
-    let server = create_test_server(&harness).await;
+    let server = crate::common::create_test_server(&harness).await;
 
     let repo = SurrealEntityRepository::new(harness.db.clone());
     let character = repo
@@ -494,7 +475,7 @@ async fn test_record_knowledge_method_deduced() {
 #[tokio::test]
 async fn test_temporal_current_knowledge() {
     let harness = TestHarness::new().await;
-    let server = create_test_server(&harness).await;
+    let server = crate::common::create_test_server(&harness).await;
 
     // Create character and record some knowledge
     let repo = SurrealEntityRepository::new(harness.db.clone());
@@ -562,7 +543,7 @@ async fn test_temporal_current_knowledge() {
 #[tokio::test]
 async fn test_temporal_at_event() {
     let harness = TestHarness::new().await;
-    let server = create_test_server(&harness).await;
+    let server = crate::common::create_test_server(&harness).await;
 
     // Create character and events
     let repo = SurrealEntityRepository::new(harness.db.clone());
@@ -637,7 +618,7 @@ async fn test_temporal_at_event() {
 #[tokio::test]
 async fn test_temporal_by_event_name() {
     let harness = TestHarness::new().await;
-    let server = create_test_server(&harness).await;
+    let server = crate::common::create_test_server(&harness).await;
 
     // Create character and event
     let repo = SurrealEntityRepository::new(harness.db.clone());
@@ -700,7 +681,7 @@ async fn test_temporal_by_event_name() {
 #[tokio::test]
 async fn test_record_knowledge_invalid_character() {
     let harness = TestHarness::new().await;
-    let server = create_test_server(&harness).await;
+    let server = crate::common::create_test_server(&harness).await;
 
     let request = MutationRequest::RecordKnowledge {
         character_id: "invalid_format".to_string(), // Not table:key format
@@ -723,7 +704,7 @@ async fn test_record_knowledge_invalid_character() {
 #[tokio::test]
 async fn test_temporal_nonexistent_character() {
     let harness = TestHarness::new().await;
-    let server = create_test_server(&harness).await;
+    let server = crate::common::create_test_server(&harness).await;
 
     let query = QueryRequest::Temporal {
         character_id: "character:nonexistent".to_string(),

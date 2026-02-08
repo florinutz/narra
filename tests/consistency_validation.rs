@@ -20,7 +20,7 @@ async fn test_circular_parent_detection() {
 
     // Create two characters
     let alice = create_character(
-        &db,
+        db,
         CharacterCreate {
             name: "Alice".to_string(),
             aliases: vec![],
@@ -32,7 +32,7 @@ async fn test_circular_parent_detection() {
     .expect("Failed to create Alice");
 
     let bob = create_character(
-        &db,
+        db,
         CharacterCreate {
             name: "Bob".to_string(),
             aliases: vec![],
@@ -48,7 +48,7 @@ async fn test_circular_parent_detection() {
 
     // Alice perceives Bob as her child (Alice is parent)
     create_perception(
-        &db,
+        db,
         &alice_key,
         &bob_key,
         PerceptionCreate {
@@ -65,7 +65,7 @@ async fn test_circular_parent_detection() {
 
     // Bob perceives Alice as his child (Bob is parent) - IMPOSSIBLE circular
     create_perception(
-        &db,
+        db,
         &bob_key,
         &alice_key,
         PerceptionCreate {
@@ -114,7 +114,7 @@ async fn test_family_asymmetry_warning() {
     let db = &harness.db;
 
     let alice = create_character(
-        &db,
+        db,
         CharacterCreate {
             name: "Alice".to_string(),
             aliases: vec![],
@@ -126,7 +126,7 @@ async fn test_family_asymmetry_warning() {
     .expect("Failed to create Alice");
 
     let bob = create_character(
-        &db,
+        db,
         CharacterCreate {
             name: "Bob".to_string(),
             aliases: vec![],
@@ -142,7 +142,7 @@ async fn test_family_asymmetry_warning() {
 
     // Alice loves Bob (family sibling)
     create_perception(
-        &db,
+        db,
         &alice_key,
         &bob_key,
         PerceptionCreate {
@@ -159,7 +159,7 @@ async fn test_family_asymmetry_warning() {
 
     // Bob resents Alice (family asymmetry)
     create_perception(
-        &db,
+        db,
         &bob_key,
         &alice_key,
         PerceptionCreate {
@@ -198,7 +198,7 @@ async fn test_romantic_asymmetry_info() {
     let db = &harness.db;
 
     let alice = create_character(
-        &db,
+        db,
         CharacterCreate {
             name: "Alice".to_string(),
             aliases: vec![],
@@ -210,7 +210,7 @@ async fn test_romantic_asymmetry_info() {
     .expect("Failed to create Alice");
 
     let bob = create_character(
-        &db,
+        db,
         CharacterCreate {
             name: "Bob".to_string(),
             aliases: vec![],
@@ -226,7 +226,7 @@ async fn test_romantic_asymmetry_info() {
 
     // Alice loves Bob romantically
     create_perception(
-        &db,
+        db,
         &alice_key,
         &bob_key,
         PerceptionCreate {
@@ -243,7 +243,7 @@ async fn test_romantic_asymmetry_info() {
 
     // Bob is indifferent to Alice (unrequited love)
     create_perception(
-        &db,
+        db,
         &bob_key,
         &alice_key,
         PerceptionCreate {
@@ -281,7 +281,7 @@ async fn test_one_way_relationship_valid() {
     let db = &harness.db;
 
     let alice = create_character(
-        &db,
+        db,
         CharacterCreate {
             name: "Alice".to_string(),
             aliases: vec![],
@@ -293,7 +293,7 @@ async fn test_one_way_relationship_valid() {
     .expect("Failed to create Alice");
 
     let bob = create_character(
-        &db,
+        db,
         CharacterCreate {
             name: "Bob".to_string(),
             aliases: vec![],
@@ -309,7 +309,7 @@ async fn test_one_way_relationship_valid() {
 
     // Alice perceives Bob (one-way, Bob doesn't know Alice exists)
     create_perception(
-        &db,
+        db,
         &alice_key,
         &bob_key,
         PerceptionCreate {
@@ -354,7 +354,7 @@ async fn test_validate_character_no_relationships() {
     let db = &harness.db;
 
     let alice = create_character(
-        &db,
+        db,
         CharacterCreate {
             name: "Lonely Alice".to_string(),
             aliases: vec![],

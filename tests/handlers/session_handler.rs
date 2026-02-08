@@ -11,15 +11,12 @@ use crate::common::harness::TestHarness;
 #[allow(unused_imports)]
 use super::*;
 
-use narra::embedding::{EmbeddingService, NoopEmbeddingService};
-use narra::mcp::tools::session::{SessionContextRequest, SessionContextResponse};
-use narra::mcp::NarraServer;
+use narra::mcp::tools::session::SessionContextRequest;
 use narra::repository::{EntityRepository, SurrealEntityRepository};
 use narra::session::SessionStateManager;
 use pretty_assertions::assert_eq;
 use rmcp::handler::server::wrapper::Parameters;
 use std::sync::Arc;
-use tempfile::TempDir;
 
 // ============================================================================
 // SESSION CONTEXT - BASIC OPERATIONS
@@ -29,17 +26,7 @@ use tempfile::TempDir;
 #[tokio::test]
 async fn test_get_session_context_success() {
     let harness = TestHarness::new().await;
-    let temp_dir = TempDir::new().expect("Temp dir");
-    let session_path = temp_dir.path().join("session.json");
-
-    let session_manager =
-        Arc::new(SessionStateManager::load_or_create(&session_path).expect("Session manager"));
-    let server = NarraServer::new(
-        harness.db.clone(),
-        session_manager,
-        Arc::new(NoopEmbeddingService::new()),
-    )
-    .await;
+    let server = crate::common::create_test_server(&harness).await;
 
     let request = SessionContextRequest { force_full: false };
     let response = server.handle_get_session_context(Parameters(request)).await;
@@ -56,17 +43,7 @@ async fn test_get_session_context_success() {
 #[tokio::test]
 async fn test_get_session_context_empty_world() {
     let harness = TestHarness::new().await;
-    let temp_dir = TempDir::new().expect("Temp dir");
-    let session_path = temp_dir.path().join("session.json");
-
-    let session_manager =
-        Arc::new(SessionStateManager::load_or_create(&session_path).expect("Session manager"));
-    let server = NarraServer::new(
-        harness.db.clone(),
-        session_manager,
-        Arc::new(NoopEmbeddingService::new()),
-    )
-    .await;
+    let server = crate::common::create_test_server(&harness).await;
 
     let request = SessionContextRequest { force_full: false };
     let response = server.handle_get_session_context(Parameters(request)).await;
@@ -99,8 +76,6 @@ async fn test_get_session_context_empty_world() {
 #[tokio::test]
 async fn test_get_session_context_with_entities() {
     let harness = TestHarness::new().await;
-    let temp_dir = TempDir::new().expect("Temp dir");
-    let session_path = temp_dir.path().join("session.json");
 
     let entity_repo = SurrealEntityRepository::new(harness.db.clone());
 
@@ -114,14 +89,7 @@ async fn test_get_session_context_with_entities() {
         .await
         .expect("Create Bob");
 
-    let session_manager =
-        Arc::new(SessionStateManager::load_or_create(&session_path).expect("Session manager"));
-    let server = NarraServer::new(
-        harness.db.clone(),
-        session_manager,
-        Arc::new(NoopEmbeddingService::new()),
-    )
-    .await;
+    let server = crate::common::create_test_server(&harness).await;
 
     let request = SessionContextRequest { force_full: false };
     let response = server.handle_get_session_context(Parameters(request)).await;
@@ -148,8 +116,6 @@ async fn test_get_session_context_with_entities() {
 #[tokio::test]
 async fn test_session_context_tracks_hot_entities() {
     let harness = TestHarness::new().await;
-    let temp_dir = TempDir::new().expect("Temp dir");
-    let session_path = temp_dir.path().join("session.json");
 
     let entity_repo = SurrealEntityRepository::new(harness.db.clone());
 
@@ -160,17 +126,15 @@ async fn test_session_context_tracks_hot_entities() {
         .expect("Create Alice");
     let alice_id = format!("character:{}", alice.id.key());
 
-    // Create session manager and record access BEFORE creating server
+    // Pre-populate session state with recorded access before creating server
+    let session_path = harness.temp_path().join("session.json");
     let session_manager =
         Arc::new(SessionStateManager::load_or_create(&session_path).expect("Session manager"));
     session_manager.record_access(&alice_id).await;
+    session_manager.save().await.expect("Save session state");
+    drop(session_manager);
 
-    let server = NarraServer::new(
-        harness.db.clone(),
-        session_manager,
-        Arc::new(NoopEmbeddingService::new()),
-    )
-    .await;
+    let server = crate::common::create_test_server(&harness).await;
 
     let request = SessionContextRequest { force_full: false };
     let response = server.handle_get_session_context(Parameters(request)).await;
@@ -189,8 +153,6 @@ async fn test_session_context_tracks_hot_entities() {
 #[tokio::test]
 async fn test_session_context_hot_entity_fields() {
     let harness = TestHarness::new().await;
-    let temp_dir = TempDir::new().expect("Temp dir");
-    let session_path = temp_dir.path().join("session.json");
 
     let entity_repo = SurrealEntityRepository::new(harness.db.clone());
 
@@ -205,17 +167,15 @@ async fn test_session_context_hot_entity_fields() {
         .expect("Create Alice");
     let alice_id = format!("character:{}", alice.id.key());
 
-    // Record access via session manager
+    // Pre-populate session state with recorded access before creating server
+    let session_path = harness.temp_path().join("session.json");
     let session_manager =
         Arc::new(SessionStateManager::load_or_create(&session_path).expect("Session manager"));
     session_manager.record_access(&alice_id).await;
+    session_manager.save().await.expect("Save session state");
+    drop(session_manager);
 
-    let server = NarraServer::new(
-        harness.db.clone(),
-        session_manager,
-        Arc::new(NoopEmbeddingService::new()),
-    )
-    .await;
+    let server = crate::common::create_test_server(&harness).await;
 
     let request = SessionContextRequest { force_full: false };
     let response = server.handle_get_session_context(Parameters(request)).await;
@@ -248,17 +208,7 @@ async fn test_session_context_hot_entity_fields() {
 #[tokio::test]
 async fn test_session_context_verbosity_level() {
     let harness = TestHarness::new().await;
-    let temp_dir = TempDir::new().expect("Temp dir");
-    let session_path = temp_dir.path().join("session.json");
-
-    let session_manager =
-        Arc::new(SessionStateManager::load_or_create(&session_path).expect("Session manager"));
-    let server = NarraServer::new(
-        harness.db.clone(),
-        session_manager,
-        Arc::new(NoopEmbeddingService::new()),
-    )
-    .await;
+    let server = crate::common::create_test_server(&harness).await;
 
     let request = SessionContextRequest { force_full: false };
     let response = server.handle_get_session_context(Parameters(request)).await;
@@ -281,21 +231,16 @@ async fn test_session_context_verbosity_level() {
 #[tokio::test]
 async fn test_session_context_force_full() {
     let harness = TestHarness::new().await;
-    let temp_dir = TempDir::new().expect("Temp dir");
-    let session_path = temp_dir.path().join("session.json");
 
+    // Pre-populate session state with a marked session end before creating server
+    let session_path = harness.temp_path().join("session.json");
     let session_manager =
         Arc::new(SessionStateManager::load_or_create(&session_path).expect("Session manager"));
-
-    // Mark a previous session to allow verbosity comparison
     session_manager.mark_session_end().await;
+    session_manager.save().await.expect("Save session state");
+    drop(session_manager);
 
-    let server = NarraServer::new(
-        harness.db.clone(),
-        session_manager,
-        Arc::new(NoopEmbeddingService::new()),
-    )
-    .await;
+    let server = crate::common::create_test_server(&harness).await;
 
     // Without force_full - may be minimal if recently active
     let request_normal = SessionContextRequest { force_full: false };

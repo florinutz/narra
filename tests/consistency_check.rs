@@ -15,7 +15,7 @@ async fn test_strict_fact_creates_critical_violation() {
 
     // Create a Strict fact: "No magic in this world"
     let fact = create_fact(
-        &db,
+        db,
         FactCreate {
             title: "No magic".to_string(),
             description:
@@ -31,7 +31,7 @@ async fn test_strict_fact_creates_critical_violation() {
 
     // Create a character to link the fact to
     let character = create_character(
-        &db,
+        db,
         CharacterCreate {
             name: "Test Wizard".to_string(),
             aliases: vec![],
@@ -45,7 +45,7 @@ async fn test_strict_fact_creates_critical_violation() {
     // Link fact to character
     let entity_id = character.id.to_string();
     let fact_key = fact.id.key().to_string();
-    link_fact_to_entity(&db, &fact_key, &entity_id, "manual", None)
+    link_fact_to_entity(db, &fact_key, &entity_id, "manual", None)
         .await
         .expect("Failed to link fact");
 
@@ -75,8 +75,8 @@ async fn test_warning_fact_allows_mutation() {
     let db = &harness.db;
 
     // Create a Warning-level fact
-    let fact = create_fact(
-        &db,
+    let _fact = create_fact(
+        db,
         FactCreate {
             title: "Names follow culture pattern".to_string(),
             description:
@@ -143,7 +143,7 @@ async fn test_informational_fact_never_blocks() {
 
     // Create an Informational-level fact
     create_fact(
-        &db,
+        db,
         FactCreate {
             title: "Common greetings".to_string(),
             description: "People commonly greet each other with a nod.".to_string(),

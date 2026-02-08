@@ -14,10 +14,15 @@ use common::harness::TestHarness;
 use narra::models::character::{create_character, delete_character};
 use narra::models::event::create_event;
 use narra::models::knowledge::{create_knowledge, KnowledgeCreate};
-use narra::models::location::{create_location, delete_location};
+use narra::models::location::create_location;
+#[cfg(feature = "surrealdb3")]
+use narra::models::location::delete_location;
 use narra::models::perception::{create_perception, PerceptionCreate};
-use narra::models::scene::{create_scene, get_scene};
+use narra::models::scene::create_scene;
+#[cfg(feature = "surrealdb3")]
+use narra::models::scene::get_scene;
 use narra::services::graph::MermaidGraphService;
+#[cfg(feature = "surrealdb3")]
 use narra::NarraError;
 
 /// Test cascade delete: deleting character removes their knowledge.

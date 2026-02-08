@@ -204,13 +204,10 @@ pub struct KnowledgeBuilder {
 
 impl KnowledgeBuilder {
     /// Create a new knowledge builder with the given fact.
-    ///
-    /// By default, knowledge is associated with a placeholder character ID.
-    /// Use `.for_character()` to specify the owning character.
     pub fn new(fact: impl Into<String>) -> Self {
         Self {
             fact: fact.into(),
-            character_id: "narrator".to_string(), // Default placeholder
+            character_id: "narrator".to_string(),
         }
     }
 

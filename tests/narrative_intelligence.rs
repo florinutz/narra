@@ -1366,6 +1366,7 @@ async fn test_what_if_conflict_detection() {
     #[derive(serde::Deserialize)]
     struct KFact {
         id: surrealdb::RecordId,
+        #[allow(dead_code)]
         fact: String,
     }
     let mut resp = harness
@@ -1443,7 +1444,6 @@ async fn test_response_format_unresolved_tensions() {
     assert!(response.total == response.results.len());
     assert!(response.next_cursor.is_none());
     assert!(!response.hints.is_empty(), "Should always have hints");
-    assert!(response.token_estimate >= 0);
 }
 
 #[tokio::test]

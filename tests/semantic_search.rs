@@ -36,7 +36,7 @@ async fn test_semantic_search_finds_by_meaning() {
     // Use real embedding service for semantic search
     let embedding_service =
         Arc::new(LocalEmbeddingService::new(EmbeddingConfig::default()).unwrap());
-    let staleness_manager = Arc::new(StalenessManager::new(
+    let _staleness_manager = Arc::new(StalenessManager::new(
         harness.db.clone(),
         embedding_service.clone(),
     ));
@@ -151,7 +151,7 @@ async fn test_semantic_search_scene_by_mood() {
 
     let embedding_service =
         Arc::new(LocalEmbeddingService::new(EmbeddingConfig::default()).unwrap());
-    let staleness_manager = Arc::new(StalenessManager::new(
+    let _staleness_manager = Arc::new(StalenessManager::new(
         harness.db.clone(),
         embedding_service.clone(),
     ));
@@ -267,7 +267,7 @@ async fn test_hybrid_search_combines_keyword_and_meaning() {
 
     let embedding_service =
         Arc::new(LocalEmbeddingService::new(EmbeddingConfig::default()).unwrap());
-    let staleness_manager = Arc::new(StalenessManager::new(
+    let _staleness_manager = Arc::new(StalenessManager::new(
         harness.db.clone(),
         embedding_service.clone(),
     ));

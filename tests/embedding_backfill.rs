@@ -13,7 +13,7 @@ use common::harness::TestHarness;
 use narra::embedding::backfill::BackfillService;
 use narra::embedding::composite::character_composite;
 use narra::embedding::StalenessManager;
-use narra::embedding::{EmbeddingConfig, EmbeddingService, LocalEmbeddingService};
+use narra::embedding::{EmbeddingConfig, LocalEmbeddingService};
 use narra::models::character::{
     create_character, get_character, update_character, CharacterCreate, CharacterUpdate,
 };
@@ -37,7 +37,7 @@ async fn test_backfill_generates_embeddings_for_all_types() {
 
     let embedding_service =
         Arc::new(LocalEmbeddingService::new(EmbeddingConfig::default()).unwrap());
-    let staleness_manager = Arc::new(StalenessManager::new(
+    let _staleness_manager = Arc::new(StalenessManager::new(
         harness.db.clone(),
         embedding_service.clone(),
     ));
@@ -231,7 +231,7 @@ async fn test_backfill_is_idempotent() {
 
     let embedding_service =
         Arc::new(LocalEmbeddingService::new(EmbeddingConfig::default()).unwrap());
-    let staleness_manager = Arc::new(StalenessManager::new(
+    let _staleness_manager = Arc::new(StalenessManager::new(
         harness.db.clone(),
         embedding_service.clone(),
     ));
@@ -458,7 +458,7 @@ async fn test_backfill_single_type() {
 
     let embedding_service =
         Arc::new(LocalEmbeddingService::new(EmbeddingConfig::default()).unwrap());
-    let staleness_manager = Arc::new(StalenessManager::new(
+    let _staleness_manager = Arc::new(StalenessManager::new(
         harness.db.clone(),
         embedding_service.clone(),
     ));

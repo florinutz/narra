@@ -9,7 +9,7 @@
 use chrono::{Duration, Utc};
 use narra::db::connection::init_db;
 use narra::db::schema::apply_schema;
-use narra::embedding::{EmbeddingService, NoopEmbeddingService};
+use narra::embedding::NoopEmbeddingService;
 use narra::mcp::tools::SessionContextRequest;
 use narra::mcp::NarraServer;
 use narra::models::{CharacterCreate, LocationCreate};

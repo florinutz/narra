@@ -40,7 +40,7 @@ async fn test_note_crud_operations() {
 
     // Create a note
     let note = create_note(
-        &db,
+        db,
         NoteCreate {
             title: "Research: Magic System".to_string(),
             body: "The magic system is based on elemental forces. Fire, water, earth, air."
@@ -56,7 +56,7 @@ async fn test_note_crud_operations() {
     let note_id = note.id.key().to_string();
 
     // Read the note
-    let fetched = get_note(&db, &note_id)
+    let fetched = get_note(db, &note_id)
         .await
         .expect("Should fetch note")
         .expect("Note should exist");
@@ -66,7 +66,7 @@ async fn test_note_crud_operations() {
 
     // Update the note
     let updated = update_note(
-        &db,
+        db,
         &note_id,
         NoteUpdate {
             title: Some("Research: Elemental Magic System".to_string()),
@@ -81,7 +81,7 @@ async fn test_note_crud_operations() {
     assert_eq!(updated.body, note.body); // Body unchanged
 
     // Delete the note
-    let deleted = delete_note(&db, &note_id)
+    let deleted = delete_note(db, &note_id)
         .await
         .expect("Should delete note")
         .expect("Note should exist");
@@ -89,7 +89,7 @@ async fn test_note_crud_operations() {
     assert_eq!(deleted.title, "Research: Elemental Magic System");
 
     // Verify deletion
-    let gone = get_note(&db, &note_id).await.expect("Query should succeed");
+    let gone = get_note(db, &note_id).await.expect("Query should succeed");
 
     assert!(gone.is_none(), "Note should be deleted");
 
@@ -120,7 +120,7 @@ async fn test_note_attachment_to_entity() {
 
     // Create a note
     let note = create_note(
-        &db,
+        db,
         NoteCreate {
             title: "Elena's Backstory Ideas".to_string(),
             body: "Consider: orphaned at age 10, raised by grandmother".to_string(),
@@ -132,7 +132,7 @@ async fn test_note_attachment_to_entity() {
     let note_id = note.id.key().to_string();
 
     // Attach note to character
-    let attachment = attach_note(&db, &note_id, &character_id)
+    let attachment = attach_note(db, &note_id, &character_id)
         .await
         .expect("Should attach note");
 
@@ -140,7 +140,7 @@ async fn test_note_attachment_to_entity() {
     assert_eq!(attachment.entity.to_string(), character_id);
 
     // Verify attachment via get_note_attachments
-    let attachments = get_note_attachments(&db, &note_id)
+    let attachments = get_note_attachments(db, &note_id)
         .await
         .expect("Should get attachments");
 
@@ -148,7 +148,7 @@ async fn test_note_attachment_to_entity() {
     assert_eq!(attachments[0].entity.to_string(), character_id);
 
     // Verify attachment via get_entity_notes
-    let entity_notes = get_entity_notes(&db, &character_id)
+    let entity_notes = get_entity_notes(db, &character_id)
         .await
         .expect("Should get entity notes");
 
@@ -156,12 +156,12 @@ async fn test_note_attachment_to_entity() {
     assert_eq!(entity_notes[0].title, "Elena's Backstory Ideas");
 
     // Detach note
-    detach_note(&db, &note_id, &character_id)
+    detach_note(db, &note_id, &character_id)
         .await
         .expect("Should detach note");
 
     // Verify detachment
-    let remaining_attachments = get_note_attachments(&db, &note_id)
+    let remaining_attachments = get_note_attachments(db, &note_id)
         .await
         .expect("Should get attachments");
 
@@ -180,7 +180,7 @@ async fn test_note_standalone_no_attachments() {
 
     // Create multiple standalone notes
     let note1 = create_note(
-        &db,
+        db,
         NoteCreate {
             title: "World Building: Climate".to_string(),
             body: "The world has three distinct seasons...".to_string(),
@@ -190,7 +190,7 @@ async fn test_note_standalone_no_attachments() {
     .expect("Should create note 1");
 
     let note2 = create_note(
-        &db,
+        db,
         NoteCreate {
             title: "Plot Idea: Betrayal Arc".to_string(),
             body: "What if the mentor character is secretly working for the enemy?".to_string(),
@@ -200,15 +200,15 @@ async fn test_note_standalone_no_attachments() {
     .expect("Should create note 2");
 
     // List notes (should return both)
-    let notes = list_notes(&db, 10, 0).await.expect("Should list notes");
+    let notes = list_notes(db, 10, 0).await.expect("Should list notes");
 
     assert_eq!(notes.len(), 2);
 
     // Verify no attachments for either note
-    let attachments1 = get_note_attachments(&db, &note1.id.key().to_string())
+    let attachments1 = get_note_attachments(db, &note1.id.key().to_string())
         .await
         .expect("Should get attachments");
-    let attachments2 = get_note_attachments(&db, &note2.id.key().to_string())
+    let attachments2 = get_note_attachments(db, &note2.id.key().to_string())
         .await
         .expect("Should get attachments");
 
@@ -234,7 +234,7 @@ async fn test_note_fulltext_search() {
 
     // Create notes with searchable content
     create_note(
-        &db,
+        db,
         NoteCreate {
             title: "Dragon Mythology".to_string(),
             body: "Dragons in this world are elemental creatures tied to volcanoes".to_string(),
@@ -244,7 +244,7 @@ async fn test_note_fulltext_search() {
     .expect("Should create note");
 
     create_note(
-        &db,
+        db,
         NoteCreate {
             title: "Character Arc: Redemption".to_string(),
             body: "The villain seeks redemption after betraying the kingdom".to_string(),
@@ -305,7 +305,7 @@ async fn test_note_search_filter_by_type() {
 
     // Create a note with "Magic" in title
     create_note(
-        &db,
+        db,
         NoteCreate {
             title: "Magic System Design".to_string(),
             body: "Notes about the magic system".to_string(),
@@ -382,7 +382,7 @@ async fn test_full_network_graph_generation() {
 
     // Create perception (relationship)
     create_perception_pair(
-        &db,
+        db,
         &alice_id,
         &bob_id,
         PerceptionCreate {
@@ -472,7 +472,7 @@ async fn test_graph_edge_styling_by_type() {
 
     // Create family relationship
     create_perception_pair(
-        &db,
+        db,
         &parent_id,
         &child_id,
         PerceptionCreate {
@@ -497,7 +497,7 @@ async fn test_graph_edge_styling_by_type() {
 
     // Create friendship relationship
     create_perception_pair(
-        &db,
+        db,
         &child_id,
         &friend_id,
         PerceptionCreate {
@@ -611,7 +611,7 @@ async fn test_character_centered_graph() {
 
     // Create chain: A->B, B->C, C->D
     create_perception_pair(
-        &db,
+        db,
         &a_id,
         &b_id,
         PerceptionCreate {
@@ -635,7 +635,7 @@ async fn test_character_centered_graph() {
     .expect("Should create A-B perception");
 
     create_perception_pair(
-        &db,
+        db,
         &b_id,
         &c_id,
         PerceptionCreate {
@@ -659,7 +659,7 @@ async fn test_character_centered_graph() {
     .expect("Should create B-C perception");
 
     create_perception_pair(
-        &db,
+        db,
         &c_id,
         &d_id,
         PerceptionCreate {
@@ -788,7 +788,7 @@ async fn test_phase7_full_workflow() {
 
     // 2. Create relationships
     create_perception_pair(
-        &db,
+        db,
         &protagonist_id,
         &antagonist_id,
         PerceptionCreate {
@@ -812,7 +812,7 @@ async fn test_phase7_full_workflow() {
     .expect("Should create rivalry");
 
     create_perception_pair(
-        &db,
+        db,
         &mentor_id,
         &protagonist_id,
         PerceptionCreate {
@@ -837,7 +837,7 @@ async fn test_phase7_full_workflow() {
 
     // 3. Create notes (worldbuilding, character development)
     let backstory_note = create_note(
-        &db,
+        db,
         NoteCreate {
             title: "Elena's Backstory".to_string(),
             body: "Elena grew up in Neo Tokyo's undercity. Her father was killed when she was 12. \
@@ -850,7 +850,7 @@ async fn test_phase7_full_workflow() {
     .expect("Should create backstory note");
 
     let plot_note = create_note(
-        &db,
+        db,
         NoteCreate {
             title: "Act 2 Plot Ideas".to_string(),
             body: "In Act 2, Elena discovers Marcus was responsible for her father's death. \
@@ -864,19 +864,19 @@ async fn test_phase7_full_workflow() {
     // 4. Attach notes to characters
     let protagonist_full_id = format!("character:{}", protagonist_id);
     attach_note(
-        &db,
+        db,
         &backstory_note.id.key().to_string(),
         &protagonist_full_id,
     )
     .await
     .expect("Should attach backstory to protagonist");
 
-    attach_note(&db, &plot_note.id.key().to_string(), &protagonist_full_id)
+    attach_note(db, &plot_note.id.key().to_string(), &protagonist_full_id)
         .await
         .expect("Should attach plot note to protagonist");
 
     // 5. Verify notes are attached
-    let protagonist_notes = get_entity_notes(&db, &protagonist_full_id)
+    let protagonist_notes = get_entity_notes(db, &protagonist_full_id)
         .await
         .expect("Should get protagonist notes");
 

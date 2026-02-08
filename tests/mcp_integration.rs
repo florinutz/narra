@@ -87,7 +87,7 @@ async fn test_search_with_fuzzy_matching() {
 
     // Should find Elena variants via fuzzy matching (might be 2 or 3 depending on threshold)
     assert!(
-        search_result.results.len() >= 1,
+        !search_result.results.is_empty(),
         "Expected at least 1 result, got {}",
         search_result.results.len()
     );
@@ -160,7 +160,7 @@ async fn test_record_and_query_knowledge() {
         .await
         .expect("Temporal query failed");
 
-    assert!(temporal_result.results.len() >= 1);
+    assert!(!temporal_result.results.is_empty());
     // Note: content may not contain "murder" since it shows target ID, not fact
     // This is expected behavior - temporal queries return knowledge state metadata
 }

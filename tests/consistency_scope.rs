@@ -311,7 +311,7 @@ async fn test_temporal_scope_before_valid_from_skips_fact() {
     let db = &harness.db;
 
     // Create events with known sequences
-    let early_event = create_event(
+    let _early_event = create_event(
         db,
         EventCreate {
             title: "Early Event".to_string(),

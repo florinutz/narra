@@ -41,9 +41,12 @@ colored = "2.1"
 comfy-table = "7.1"
 serde_yaml_ng = "0.10"
 
+[features]
+surrealdb3 = []
+
 [profile.release]
 codegen-units = 1
-lto = true
+lto = "thin"
 opt-level = 3
 panic = "abort"
 strip = true
