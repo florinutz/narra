@@ -3,16 +3,10 @@
 use anyhow::Result;
 
 use crate::cli::output::{output_json, output_json_list, print_success, print_table, OutputMode};
+use crate::cli::resolve::bare_key;
 use crate::init::AppContext;
 use crate::models::RelationshipCreate;
 use crate::repository::RelationshipRepository;
-
-/// Strip a known table prefix from an entity ID, returning the bare key.
-fn bare_key(id: &str, prefix: &str) -> String {
-    id.strip_prefix(&format!("{}:", prefix))
-        .unwrap_or(id)
-        .to_string()
-}
 
 pub async fn list_relationships(
     ctx: &AppContext,
@@ -69,7 +63,6 @@ pub async fn create_relationship(
     label: Option<&str>,
     mode: OutputMode,
 ) -> Result<()> {
-    // Repository expects BARE keys (not "character:alice")
     let from_key = bare_key(from, "character");
     let to_key = bare_key(to, "character");
 

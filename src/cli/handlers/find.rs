@@ -1,8 +1,8 @@
-//! Search handler for CLI.
+//! Find handler for CLI — hybrid search by default.
 
 use anyhow::Result;
 
-use crate::cli::output::{output_json_list, print_table, OutputMode};
+use crate::cli::output::{output_json_list, print_hint, print_table, OutputMode};
 use crate::init::AppContext;
 use crate::services::{EntityType, SearchFilter};
 
@@ -19,11 +19,13 @@ fn parse_entity_type(s: &str) -> Option<EntityType> {
     }
 }
 
-pub async fn handle_search(
+#[allow(clippy::too_many_arguments)]
+pub async fn handle_find(
     ctx: &AppContext,
     query: &str,
-    semantic: bool,
-    hybrid: bool,
+    keyword_only: bool,
+    semantic_only: bool,
+    no_semantic: bool,
     entity_type: Option<&str>,
     limit: usize,
     mode: OutputMode,
@@ -33,7 +35,10 @@ pub async fn handle_search(
             if let Some(et) = parse_entity_type(t) {
                 vec![et]
             } else {
-                anyhow::bail!("Unknown entity type '{}'. Valid types: character, location, event, scene, knowledge, note", t);
+                anyhow::bail!(
+                    "Unknown entity type '{}'. Valid types: character, location, event, scene, knowledge, note",
+                    t
+                );
             }
         }
         None => vec![],
@@ -45,12 +50,23 @@ pub async fn handle_search(
         ..Default::default()
     };
 
-    let results = if hybrid {
-        ctx.search_service.hybrid_search(query, filter).await?
-    } else if semantic {
-        ctx.search_service.semantic_search(query, filter).await?
+    // Determine search strategy: hybrid by default, with graceful fallback
+    let (results, search_mode) = if keyword_only || no_semantic {
+        let r = ctx.search_service.search(query, filter).await?;
+        (r, "keyword")
+    } else if semantic_only {
+        let r = ctx.search_service.semantic_search(query, filter).await?;
+        (r, "semantic")
     } else {
-        ctx.search_service.search(query, filter).await?
+        // Default: hybrid (auto-falls back to keyword if embeddings unavailable)
+        let has_embeddings = ctx.embedding_service.is_available();
+        let r = ctx.search_service.hybrid_search(query, filter).await?;
+        let mode_label = if has_embeddings {
+            "hybrid"
+        } else {
+            "keyword (semantic unavailable)"
+        };
+        (r, mode_label)
     };
 
     if mode == OutputMode::Json {
@@ -58,17 +74,9 @@ pub async fn handle_search(
         return Ok(());
     }
 
-    let search_type = if hybrid {
-        "hybrid"
-    } else if semantic {
-        "semantic"
-    } else {
-        "keyword"
-    };
-
     println!(
         "Search ({}) for '{}': {} results\n",
-        search_type,
+        search_mode,
         query,
         results.len()
     );
@@ -86,5 +94,10 @@ pub async fn handle_search(
         .collect();
 
     print_table(&["ID", "Type", "Name", "Score"], rows);
+
+    if results.is_empty() {
+        print_hint("Try broadening your query or removing the --type filter.");
+    }
+
     Ok(())
 }

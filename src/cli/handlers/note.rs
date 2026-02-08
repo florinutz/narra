@@ -5,16 +5,10 @@ use anyhow::Result;
 use crate::cli::output::{
     output_json, output_json_list, print_error, print_success, print_table, OutputMode,
 };
+use crate::cli::resolve::bare_key;
 use crate::init::AppContext;
 use crate::models::note;
 use crate::models::NoteCreate;
-
-/// Strip a known table prefix from an entity ID, returning the bare key.
-fn bare_key(id: &str, prefix: &str) -> String {
-    id.strip_prefix(&format!("{}:", prefix))
-        .unwrap_or(id)
-        .to_string()
-}
 
 pub async fn list_notes(ctx: &AppContext, entity: Option<&str>, mode: OutputMode) -> Result<()> {
     let notes = match entity {
@@ -58,7 +52,6 @@ pub async fn create_note(
     let created = note::create_note(&ctx.db, data).await?;
     let note_key = created.id.key().to_string();
 
-    // Attach to entities if specified
     for entity_id in attach_to {
         match note::attach_note(&ctx.db, &note_key, entity_id).await {
             Ok(_) => {

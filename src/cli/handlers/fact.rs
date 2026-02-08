@@ -5,16 +5,10 @@ use anyhow::Result;
 use crate::cli::output::{
     output_json, output_json_list, print_error, print_success, print_table, OutputMode,
 };
+use crate::cli::resolve::bare_key;
 use crate::init::AppContext;
 use crate::models::fact;
 use crate::models::{EnforcementLevel, FactCategory, FactCreate, FactUpdate};
-
-/// Strip a known table prefix from an entity ID, returning the bare key.
-fn bare_key(id: &str, prefix: &str) -> String {
-    id.strip_prefix(&format!("{}:", prefix))
-        .unwrap_or(id)
-        .to_string()
-}
 
 fn parse_category(s: &str) -> FactCategory {
     match s.to_lowercase().as_str() {

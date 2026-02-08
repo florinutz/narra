@@ -2,13 +2,14 @@
 
 pub mod handlers;
 pub mod output;
+pub mod resolve;
 
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
-use output::OutputMode;
+use output::{DetailLevel, OutputMode};
 
-/// Narra - World state management for fiction writing
+/// Narra - Narrative intelligence engine for fiction writing
 #[derive(Parser)]
 #[command(name = "narra", version, about, long_about = None)]
 pub struct Cli {
@@ -20,6 +21,22 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub json: bool,
 
+    /// Output as Markdown
+    #[arg(long, global = true)]
+    pub md: bool,
+
+    /// Brief output (less detail)
+    #[arg(long, global = true)]
+    pub brief: bool,
+
+    /// Full output (maximum detail)
+    #[arg(long, global = true)]
+    pub full: bool,
+
+    /// Disable semantic search (use keyword only)
+    #[arg(long, global = true)]
+    pub no_semantic: bool,
+
     #[command(subcommand)]
     pub command: Commands,
 }
@@ -29,33 +46,18 @@ pub enum Commands {
     /// Start MCP server (stdio transport for Claude Code integration)
     Mcp,
 
-    /// Character management
-    #[command(subcommand)]
-    Character(CharacterCommands),
-
-    /// Location management
-    #[command(subcommand)]
-    Location(LocationCommands),
-
-    /// Event management
-    #[command(subcommand)]
-    Event(EventCommands),
-
-    /// Scene management
-    #[command(subcommand)]
-    Scene(SceneCommands),
-
-    /// Search entities by text
-    Search {
+    /// Search across all entities (hybrid by default)
+    #[command(alias = "search")]
+    Find {
         /// Search query
         query: String,
-        /// Use semantic (vector) search
+        /// Use keyword search only (no semantic/vector)
         #[arg(long)]
-        semantic: bool,
-        /// Use hybrid (keyword + semantic) search
+        keyword_only: bool,
+        /// Use semantic (vector) search only
         #[arg(long)]
-        hybrid: bool,
-        /// Filter by entity type (character, location, event, scene)
+        semantic_only: bool,
+        /// Filter by entity type (character, location, event, scene, knowledge, note)
         #[arg(long, name = "type")]
         entity_type: Option<String>,
         /// Maximum results
@@ -63,23 +65,38 @@ pub enum Commands {
         limit: usize,
     },
 
-    /// Knowledge management
-    #[command(subcommand)]
-    Knowledge(KnowledgeCommands),
+    /// Get any entity by ID or name
+    Get {
+        /// Entity ID (type:key) or name for auto-resolution
+        entity_id: String,
+    },
 
-    /// Relationship management
-    #[command(subcommand)]
-    Relationship(RelationshipCommands),
+    /// List entities of a given type
+    List {
+        /// Entity type (character, location, event, scene, knowledge, relationship, fact, note)
+        entity_type: String,
+        /// Filter by character (for knowledge, relationship)
+        #[arg(long)]
+        character: Option<String>,
+        /// Filter by category (for facts)
+        #[arg(long)]
+        category: Option<String>,
+        /// Filter by enforcement level (for facts)
+        #[arg(long)]
+        enforcement: Option<String>,
+        /// Filter by attached entity (for notes)
+        #[arg(long)]
+        entity: Option<String>,
+        /// Maximum results
+        #[arg(long, default_value = "100")]
+        limit: usize,
+    },
 
-    /// Universe fact management
+    /// Create a new entity
     #[command(subcommand)]
-    Fact(FactCommands),
+    Create(CreateCommands),
 
-    /// Note management
-    #[command(subcommand)]
-    Note(NoteCommands),
-
-    /// Update entity fields
+    /// Update entity fields (with optional --link / --unlink for facts and notes)
     Update {
         /// Entity ID (e.g., character:alice)
         entity_id: String,
@@ -89,6 +106,12 @@ pub enum Commands {
         /// Set single field (key=value, repeatable)
         #[arg(long, value_parser = parse_key_val, action = clap::ArgAction::Append)]
         set: Vec<(String, String)>,
+        /// Link to entity (for facts: link fact to entity; for notes: attach note to entity)
+        #[arg(long)]
+        link: Option<String>,
+        /// Unlink from entity (for facts: unlink; for notes: detach)
+        #[arg(long)]
+        unlink: Option<String>,
     },
 
     /// Delete entity
@@ -100,149 +123,101 @@ pub enum Commands {
         hard: bool,
     },
 
+    /// Narrative analytics and intelligence
+    #[command(subcommand)]
+    Analyze(AnalyzeCommands),
+
+    /// World management (status, health, import/export, validation)
+    #[command(subcommand)]
+    World(WorldCommands),
+
+    // =========================================================================
+    // Legacy subcommands kept for backward compatibility (hidden)
+    // =========================================================================
+    /// Character management
+    #[command(subcommand, hide = true)]
+    Character(CharacterCommands),
+
+    /// Location management
+    #[command(subcommand, hide = true)]
+    Location(LocationCommands),
+
+    /// Event management
+    #[command(subcommand, hide = true)]
+    Event(EventCommands),
+
+    /// Scene management
+    #[command(subcommand, hide = true)]
+    Scene(SceneCommands),
+
+    /// Knowledge management
+    #[command(subcommand, hide = true)]
+    Knowledge(KnowledgeCommands),
+
+    /// Relationship management
+    #[command(subcommand, hide = true)]
+    Relationship(RelationshipCommands),
+
+    /// Universe fact management
+    #[command(subcommand, hide = true)]
+    Fact(FactCommands),
+
+    /// Note management
+    #[command(subcommand, hide = true)]
+    Note(NoteCommands),
+
     /// Embedding health report
+    #[command(hide = true)]
     Health,
 
-    /// Backfill embeddings for all or specific entity types
+    /// Backfill embeddings
+    #[command(hide = true)]
     Backfill {
-        /// Entity type filter
         #[arg(long, name = "type")]
         entity_type: Option<String>,
     },
 
-    /// Export world data to YAML (NarraImport format)
+    /// Export world data to YAML
+    #[command(hide = true)]
     Export {
-        /// Output file path (defaults to ./narra-export-{date}.yaml)
         #[arg(long, short)]
         output: Option<PathBuf>,
     },
 
     /// Validate entity consistency
-    Validate {
-        /// Entity ID (omit for general check)
-        entity_id: Option<String>,
-    },
+    #[command(hide = true)]
+    Validate { entity_id: Option<String> },
 
-    /// Import world data from a YAML file.
-    ///
-    /// The YAML file contains sections for: characters, locations, events, scenes,
-    /// relationships, knowledge, notes, and facts. See the import template at
-    /// src/mcp/resources/import_template.yaml for the full format with examples.
+    /// Import world data from YAML
+    #[command(hide = true)]
     Import {
-        /// Path to YAML import file (see import_template.yaml for format)
         file: PathBuf,
-        /// Conflict resolution: error (default) reports duplicates, skip silently
-        /// ignores them, update merges fields into existing entities
         #[arg(long, default_value = "error")]
         on_conflict: String,
-        /// Parse and show entity counts without writing to database
         #[arg(long)]
         dry_run: bool,
     },
 
-    /// Generate relationship graph (Mermaid format)
+    /// Generate relationship graph
+    #[command(hide = true)]
     Graph {
-        /// Scope: 'full' or 'character:ID'
         #[arg(long, default_value = "full")]
         scope: String,
-        /// Traversal depth
         #[arg(long, default_value = "2")]
         depth: usize,
-        /// Output file path
         #[arg(long, short)]
         output: Option<PathBuf>,
     },
-
-    /// Narrative analytics and intelligence
-    #[command(subcommand)]
-    Analyze(AnalyzeCommands),
 }
 
-#[derive(Subcommand)]
-pub enum AnalyzeCommands {
-    /// Network centrality metrics (degree, betweenness)
-    Centrality {
-        /// Scope filter (e.g. "perceives", "relationships")
-        #[arg(long)]
-        scope: Option<String>,
-        /// Maximum results
-        #[arg(long, default_value = "20")]
-        limit: usize,
-    },
-    /// Trace influence propagation from a character
-    Influence {
-        /// Character ID (e.g. "alice" or "character:alice")
-        character: String,
-        /// Maximum propagation depth
-        #[arg(long, default_value = "3")]
-        depth: usize,
-    },
-    /// Dramatic irony report (knowledge asymmetries)
-    Irony {
-        /// Focus on specific character
-        #[arg(long)]
-        character: Option<String>,
-        /// Minimum scenes-since threshold
-        #[arg(long, default_value = "3")]
-        threshold: usize,
-    },
-    /// Knowledge asymmetries between a specific pair
-    Asymmetries {
-        /// First character ID
-        character_a: String,
-        /// Second character ID
-        character_b: String,
-    },
-    /// BelievesWrongly knowledge conflicts
-    Conflicts {
-        /// Filter by character
-        #[arg(long)]
-        character: Option<String>,
-        /// Maximum results
-        #[arg(long, default_value = "50")]
-        limit: usize,
-    },
-    /// Unresolved perception tensions
-    Tensions {
-        /// Maximum results
-        #[arg(long, default_value = "20")]
-        limit: usize,
-    },
-    /// Most-changed entities by arc drift
-    ArcDrift {
-        /// Filter by entity type (e.g. "character", "knowledge")
-        #[arg(long, name = "type")]
-        entity_type: Option<String>,
-        /// Maximum results
-        #[arg(long, default_value = "20")]
-        limit: usize,
-    },
-    /// Narrative situation report (irony, conflicts, tensions, themes)
-    SituationReport,
-    /// Character dossier (network, knowledge, perceptions)
-    Dossier {
-        /// Character ID (e.g. "alice" or "character:alice")
-        character: String,
-    },
-    /// Scene planning for a set of characters
-    ScenePrep {
-        /// Character IDs (comma-separated)
-        #[arg(value_delimiter = ',')]
-        characters: Vec<String>,
-    },
-}
+// =============================================================================
+// New sub-enums
+// =============================================================================
 
 #[derive(Subcommand)]
-pub enum CharacterCommands {
-    /// List all characters
-    List,
-    /// Get character details
-    Get {
-        /// Character ID (with or without 'character:' prefix)
-        id: String,
-    },
-    /// Create new character
-    Create {
+pub enum CreateCommands {
+    /// Create a new character
+    Character {
         #[arg(long)]
         name: String,
         #[arg(long)]
@@ -255,15 +230,228 @@ pub enum CharacterCommands {
         #[arg(long)]
         profile: Option<String>,
     },
+    /// Create a new location
+    Location {
+        #[arg(long)]
+        name: String,
+        #[arg(long)]
+        parent: Option<String>,
+        #[arg(long)]
+        description: Option<String>,
+        #[arg(long)]
+        loc_type: Option<String>,
+    },
+    /// Create a new event
+    Event {
+        #[arg(long)]
+        title: String,
+        #[arg(long)]
+        description: Option<String>,
+        #[arg(long)]
+        sequence: Option<i32>,
+        #[arg(long)]
+        date: Option<String>,
+    },
+    /// Create a new scene
+    Scene {
+        #[arg(long)]
+        title: String,
+        #[arg(long)]
+        event: String,
+        #[arg(long)]
+        location: String,
+        #[arg(long)]
+        summary: Option<String>,
+    },
+    /// Record character knowledge
+    Knowledge {
+        #[arg(long)]
+        character: String,
+        #[arg(long)]
+        fact: String,
+        #[arg(long, default_value = "knows")]
+        certainty: String,
+        #[arg(long)]
+        method: Option<String>,
+        #[arg(long)]
+        source: Option<String>,
+        #[arg(long)]
+        event: Option<String>,
+    },
+    /// Create a relationship between characters
+    Relationship {
+        #[arg(long)]
+        from: String,
+        #[arg(long)]
+        to: String,
+        #[arg(long, name = "type")]
+        rel_type: String,
+        #[arg(long)]
+        subtype: Option<String>,
+        #[arg(long)]
+        label: Option<String>,
+    },
+    /// Create a universe fact
+    Fact {
+        #[arg(long)]
+        title: String,
+        #[arg(long)]
+        description: String,
+        #[arg(long, value_delimiter = ',')]
+        categories: Vec<String>,
+        #[arg(long)]
+        enforcement: Option<String>,
+    },
+    /// Create a note
+    Note {
+        #[arg(long)]
+        title: String,
+        #[arg(long)]
+        body: String,
+        #[arg(long, value_delimiter = ',')]
+        attach_to: Vec<String>,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum WorldCommands {
+    /// World overview dashboard (entity counts, embedding coverage)
+    Status,
+    /// Embedding health report
+    Health,
+    /// Backfill embeddings for all or specific entity types
+    Backfill {
+        /// Entity type filter
+        #[arg(long, name = "type")]
+        entity_type: Option<String>,
+    },
+    /// Export world data to YAML
+    Export {
+        /// Output file path (defaults to ./narra-export-{date}.yaml)
+        #[arg(long, short)]
+        output: Option<PathBuf>,
+    },
+    /// Import world data from a YAML file
+    Import {
+        /// Path to YAML import file
+        file: PathBuf,
+        /// Conflict resolution: error, skip, or update
+        #[arg(long, default_value = "error")]
+        on_conflict: String,
+        /// Parse and show entity counts without writing to database
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Validate entity consistency
+    Validate {
+        /// Entity ID (omit for general check)
+        entity_id: Option<String>,
+    },
+    /// Generate relationship graph (Mermaid format)
+    Graph {
+        /// Scope: 'full' or 'character:ID'
+        #[arg(long, default_value = "full")]
+        scope: String,
+        /// Traversal depth
+        #[arg(long, default_value = "2")]
+        depth: usize,
+        /// Output file path
+        #[arg(long, short)]
+        output: Option<PathBuf>,
+    },
+}
+
+// =============================================================================
+// Analyze commands (unchanged from original)
+// =============================================================================
+
+#[derive(Subcommand)]
+pub enum AnalyzeCommands {
+    /// Network centrality metrics (degree, betweenness)
+    Centrality {
+        #[arg(long)]
+        scope: Option<String>,
+        #[arg(long, default_value = "20")]
+        limit: usize,
+    },
+    /// Trace influence propagation from a character
+    Influence {
+        character: String,
+        #[arg(long, default_value = "3")]
+        depth: usize,
+    },
+    /// Dramatic irony report (knowledge asymmetries)
+    Irony {
+        #[arg(long)]
+        character: Option<String>,
+        #[arg(long, default_value = "3")]
+        threshold: usize,
+    },
+    /// Knowledge asymmetries between a specific pair
+    Asymmetries {
+        character_a: String,
+        character_b: String,
+    },
+    /// BelievesWrongly knowledge conflicts
+    Conflicts {
+        #[arg(long)]
+        character: Option<String>,
+        #[arg(long, default_value = "50")]
+        limit: usize,
+    },
+    /// Unresolved perception tensions
+    Tensions {
+        #[arg(long, default_value = "20")]
+        limit: usize,
+    },
+    /// Most-changed entities by arc drift
+    ArcDrift {
+        #[arg(long, name = "type")]
+        entity_type: Option<String>,
+        #[arg(long, default_value = "20")]
+        limit: usize,
+    },
+    /// Narrative situation report (irony, conflicts, tensions, themes)
+    SituationReport,
+    /// Character dossier (network, knowledge, perceptions)
+    Dossier { character: String },
+    /// Scene planning for a set of characters
+    ScenePrep {
+        #[arg(value_delimiter = ',')]
+        characters: Vec<String>,
+    },
+}
+
+// =============================================================================
+// Legacy sub-enums (hidden, backward compat)
+// =============================================================================
+
+#[derive(Subcommand)]
+pub enum CharacterCommands {
+    List,
+    Get {
+        id: String,
+    },
+    Create {
+        #[arg(long)]
+        name: String,
+        #[arg(long)]
+        role: Option<String>,
+        #[arg(long)]
+        description: Option<String>,
+        #[arg(long, value_delimiter = ',')]
+        aliases: Vec<String>,
+        #[arg(long)]
+        profile: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
 pub enum LocationCommands {
-    /// List all locations
     List,
-    /// Get location details
-    Get { id: String },
-    /// Create new location
+    Get {
+        id: String,
+    },
     Create {
         #[arg(long)]
         name: String,
@@ -278,11 +466,10 @@ pub enum LocationCommands {
 
 #[derive(Subcommand)]
 pub enum EventCommands {
-    /// List all events (ordered by sequence)
     List,
-    /// Get event details
-    Get { id: String },
-    /// Create new event
+    Get {
+        id: String,
+    },
     Create {
         #[arg(long)]
         title: String,
@@ -297,11 +484,10 @@ pub enum EventCommands {
 
 #[derive(Subcommand)]
 pub enum SceneCommands {
-    /// List all scenes
     List,
-    /// Get scene details
-    Get { id: String },
-    /// Create new scene
+    Get {
+        id: String,
+    },
     Create {
         #[arg(long)]
         title: String,
@@ -316,12 +502,10 @@ pub enum SceneCommands {
 
 #[derive(Subcommand)]
 pub enum KnowledgeCommands {
-    /// List knowledge (filtered by character)
     List {
         #[arg(long)]
         character: Option<String>,
     },
-    /// Record character knowledge
     Record {
         #[arg(long)]
         character: String,
@@ -340,12 +524,10 @@ pub enum KnowledgeCommands {
 
 #[derive(Subcommand)]
 pub enum RelationshipCommands {
-    /// List relationships (filtered by character)
     List {
         #[arg(long)]
         character: Option<String>,
     },
-    /// Create relationship between characters
     Create {
         #[arg(long)]
         from: String,
@@ -362,7 +544,6 @@ pub enum RelationshipCommands {
 
 #[derive(Subcommand)]
 pub enum FactCommands {
-    /// List universe facts
     List {
         #[arg(long)]
         category: Option<String>,
@@ -371,9 +552,9 @@ pub enum FactCommands {
         #[arg(long)]
         search: Option<String>,
     },
-    /// Get fact by ID
-    Get { id: String },
-    /// Create universe fact
+    Get {
+        id: String,
+    },
     Create {
         #[arg(long)]
         title: String,
@@ -384,7 +565,6 @@ pub enum FactCommands {
         #[arg(long)]
         enforcement: Option<String>,
     },
-    /// Update universe fact
     Update {
         id: String,
         #[arg(long)]
@@ -396,16 +576,15 @@ pub enum FactCommands {
         #[arg(long)]
         enforcement: Option<String>,
     },
-    /// Delete universe fact
-    Delete { id: String },
-    /// Link fact to entity
+    Delete {
+        id: String,
+    },
     Link {
         #[arg(long)]
         fact: String,
         #[arg(long)]
         entity: String,
     },
-    /// Unlink fact from entity
     Unlink {
         #[arg(long)]
         fact: String,
@@ -416,12 +595,10 @@ pub enum FactCommands {
 
 #[derive(Subcommand)]
 pub enum NoteCommands {
-    /// List notes
     List {
         #[arg(long)]
         entity: Option<String>,
     },
-    /// Create note
     Create {
         #[arg(long)]
         title: String,
@@ -430,14 +607,12 @@ pub enum NoteCommands {
         #[arg(long, value_delimiter = ',')]
         attach_to: Vec<String>,
     },
-    /// Attach note to entity
     Attach {
         #[arg(long)]
         note: String,
         #[arg(long)]
         entity: String,
     },
-    /// Detach note from entity
     Detach {
         #[arg(long)]
         note: String,
@@ -458,14 +633,157 @@ fn parse_key_val(s: &str) -> Result<(String, String), String> {
 pub async fn execute(
     command: &Commands,
     ctx: &crate::init::AppContext,
-    json: bool,
+    mode: OutputMode,
+    detail: DetailLevel,
+    no_semantic: bool,
 ) -> anyhow::Result<()> {
-    let mode = OutputMode::from_json_flag(json);
+    let _ = detail; // Used in future sessions for controlling output verbosity
 
     match command {
         Commands::Mcp => unreachable!("MCP handled in main"),
 
-        // Character commands
+        // =====================================================================
+        // New intent-based commands
+        // =====================================================================
+        Commands::Find {
+            query,
+            keyword_only,
+            semantic_only,
+            entity_type,
+            limit,
+        } => {
+            handlers::find::handle_find(
+                ctx,
+                query,
+                *keyword_only,
+                *semantic_only,
+                no_semantic,
+                entity_type.as_deref(),
+                *limit,
+                mode,
+            )
+            .await?
+        }
+
+        Commands::Get { entity_id } => handlers::entity::handle_get(ctx, entity_id, mode).await?,
+
+        Commands::List {
+            entity_type,
+            character,
+            category,
+            enforcement,
+            entity,
+            limit,
+        } => {
+            handlers::entity::handle_list(
+                ctx,
+                entity_type,
+                character.as_deref(),
+                category.as_deref(),
+                enforcement.as_deref(),
+                entity.as_deref(),
+                *limit,
+                mode,
+            )
+            .await?
+        }
+
+        Commands::Create(cmd) => handle_create(cmd, ctx, mode).await?,
+
+        Commands::Update {
+            entity_id,
+            fields,
+            set,
+            link,
+            unlink,
+        } => {
+            handlers::utility::handle_update(
+                ctx,
+                entity_id,
+                fields.as_deref(),
+                set,
+                link.as_deref(),
+                unlink.as_deref(),
+                mode,
+            )
+            .await?
+        }
+
+        Commands::Delete { entity_id, hard } => {
+            handlers::utility::handle_delete(ctx, entity_id, *hard, mode).await?
+        }
+
+        // =====================================================================
+        // World commands
+        // =====================================================================
+        Commands::World(cmd) => match cmd {
+            WorldCommands::Status => handlers::world::handle_status(ctx, mode).await?,
+            WorldCommands::Health => handlers::world::handle_health(ctx, mode).await?,
+            WorldCommands::Backfill { entity_type } => {
+                handlers::world::handle_backfill(ctx, entity_type.as_deref(), mode).await?
+            }
+            WorldCommands::Export { output } => {
+                handlers::world::handle_export(ctx, output.as_deref(), mode).await?
+            }
+            WorldCommands::Import {
+                file,
+                on_conflict,
+                dry_run,
+            } => handlers::world::handle_import(ctx, file, on_conflict, *dry_run, mode).await?,
+            WorldCommands::Validate { entity_id } => {
+                handlers::world::handle_validate(ctx, entity_id.as_deref(), mode).await?
+            }
+            WorldCommands::Graph {
+                scope,
+                depth,
+                output,
+            } => handlers::world::handle_graph(ctx, scope, *depth, output.as_deref(), mode).await?,
+        },
+
+        // =====================================================================
+        // Analyze commands (unchanged)
+        // =====================================================================
+        Commands::Analyze(cmd) => match cmd {
+            AnalyzeCommands::Centrality { scope, limit } => {
+                handlers::analyze::handle_centrality(ctx, scope.as_deref(), *limit, mode).await?
+            }
+            AnalyzeCommands::Influence { character, depth } => {
+                handlers::analyze::handle_influence(ctx, character, *depth, mode).await?
+            }
+            AnalyzeCommands::Irony {
+                character,
+                threshold,
+            } => {
+                handlers::analyze::handle_irony(ctx, character.as_deref(), *threshold, mode).await?
+            }
+            AnalyzeCommands::Asymmetries {
+                character_a,
+                character_b,
+            } => handlers::analyze::handle_asymmetries(ctx, character_a, character_b, mode).await?,
+            AnalyzeCommands::Conflicts { character, limit } => {
+                handlers::analyze::handle_conflicts(ctx, character.as_deref(), *limit, mode).await?
+            }
+            AnalyzeCommands::Tensions { limit } => {
+                handlers::analyze::handle_tensions(ctx, *limit, mode).await?
+            }
+            AnalyzeCommands::ArcDrift { entity_type, limit } => {
+                handlers::analyze::handle_arc_drift(ctx, entity_type.as_deref(), *limit, mode)
+                    .await?
+            }
+            AnalyzeCommands::SituationReport => {
+                handlers::analyze::handle_situation_report(ctx, mode).await?
+            }
+            AnalyzeCommands::Dossier { character } => {
+                handlers::analyze::handle_dossier(ctx, character, mode).await?
+            }
+            AnalyzeCommands::ScenePrep { characters } => {
+                handlers::analyze::handle_scene_prep(ctx, characters, mode).await?
+            }
+        },
+
+        // =====================================================================
+        // Legacy commands (hidden, backward compat)
+        // =====================================================================
         Commands::Character(cmd) => match cmd {
             CharacterCommands::List => handlers::entity::list_characters(ctx, mode).await?,
             CharacterCommands::Get { id } => handlers::entity::get_character(ctx, id, mode).await?,
@@ -489,7 +807,6 @@ pub async fn execute(
             }
         },
 
-        // Location commands
         Commands::Location(cmd) => match cmd {
             LocationCommands::List => handlers::entity::list_locations(ctx, mode).await?,
             LocationCommands::Get { id } => handlers::entity::get_location(ctx, id, mode).await?,
@@ -511,7 +828,6 @@ pub async fn execute(
             }
         },
 
-        // Event commands
         Commands::Event(cmd) => match cmd {
             EventCommands::List => handlers::entity::list_events(ctx, mode).await?,
             EventCommands::Get { id } => handlers::entity::get_event(ctx, id, mode).await?,
@@ -533,7 +849,6 @@ pub async fn execute(
             }
         },
 
-        // Scene commands
         Commands::Scene(cmd) => match cmd {
             SceneCommands::List => handlers::entity::list_scenes(ctx, mode).await?,
             SceneCommands::Get { id } => handlers::entity::get_scene(ctx, id, mode).await?,
@@ -555,27 +870,6 @@ pub async fn execute(
             }
         },
 
-        // Search
-        Commands::Search {
-            query,
-            semantic,
-            hybrid,
-            entity_type,
-            limit,
-        } => {
-            handlers::search::handle_search(
-                ctx,
-                query,
-                *semantic,
-                *hybrid,
-                entity_type.as_deref(),
-                *limit,
-                mode,
-            )
-            .await?
-        }
-
-        // Knowledge commands
         Commands::Knowledge(cmd) => match cmd {
             KnowledgeCommands::List { character } => {
                 handlers::knowledge::list_knowledge(ctx, character.as_deref(), mode).await?
@@ -602,7 +896,6 @@ pub async fn execute(
             }
         },
 
-        // Relationship commands
         Commands::Relationship(cmd) => match cmd {
             RelationshipCommands::List { character } => {
                 handlers::relationship::list_relationships(ctx, character.as_deref(), mode).await?
@@ -627,7 +920,6 @@ pub async fn execute(
             }
         },
 
-        // Fact commands
         Commands::Fact(cmd) => match cmd {
             FactCommands::List { .. } => handlers::fact::list_facts(ctx, mode).await?,
             FactCommands::Get { id } => handlers::fact::get_fact(ctx, id, mode).await?,
@@ -674,7 +966,6 @@ pub async fn execute(
             }
         },
 
-        // Note commands
         Commands::Note(cmd) => match cmd {
             NoteCommands::List { entity } => {
                 handlers::note::list_notes(ctx, entity.as_deref(), mode).await?
@@ -692,75 +983,156 @@ pub async fn execute(
             }
         },
 
-        // Utility commands
-        Commands::Update {
-            entity_id,
-            fields,
-            set,
-        } => handlers::utility::handle_update(ctx, entity_id, fields.as_deref(), set, mode).await?,
-        Commands::Delete { entity_id, hard } => {
-            handlers::utility::handle_delete(ctx, entity_id, *hard, mode).await?
-        }
-        Commands::Health => handlers::utility::handle_health(ctx, mode).await?,
+        // Legacy top-level aliases → world commands
+        Commands::Health => handlers::world::handle_health(ctx, mode).await?,
         Commands::Backfill { entity_type } => {
-            handlers::utility::handle_backfill(ctx, entity_type.as_deref(), mode).await?
+            handlers::world::handle_backfill(ctx, entity_type.as_deref(), mode).await?
         }
         Commands::Export { output } => {
-            handlers::utility::handle_export(ctx, output.as_deref(), mode).await?
+            handlers::world::handle_export(ctx, output.as_deref(), mode).await?
         }
         Commands::Validate { entity_id } => {
-            handlers::utility::handle_validate(ctx, entity_id.as_deref(), mode).await?
+            handlers::world::handle_validate(ctx, entity_id.as_deref(), mode).await?
         }
         Commands::Import {
             file,
             on_conflict,
             dry_run,
-        } => handlers::import::handle_import(ctx, file, on_conflict, *dry_run, mode).await?,
+        } => handlers::world::handle_import(ctx, file, on_conflict, *dry_run, mode).await?,
         Commands::Graph {
             scope,
             depth,
             output,
-        } => handlers::utility::handle_graph(ctx, scope, *depth, output.as_deref(), mode).await?,
-
-        // Analyze commands
-        Commands::Analyze(cmd) => match cmd {
-            AnalyzeCommands::Centrality { scope, limit } => {
-                handlers::analyze::handle_centrality(ctx, scope.as_deref(), *limit, mode).await?
-            }
-            AnalyzeCommands::Influence { character, depth } => {
-                handlers::analyze::handle_influence(ctx, character, *depth, mode).await?
-            }
-            AnalyzeCommands::Irony {
-                character,
-                threshold,
-            } => {
-                handlers::analyze::handle_irony(ctx, character.as_deref(), *threshold, mode).await?
-            }
-            AnalyzeCommands::Asymmetries {
-                character_a,
-                character_b,
-            } => handlers::analyze::handle_asymmetries(ctx, character_a, character_b, mode).await?,
-            AnalyzeCommands::Conflicts { character, limit } => {
-                handlers::analyze::handle_conflicts(ctx, character.as_deref(), *limit, mode).await?
-            }
-            AnalyzeCommands::Tensions { limit } => {
-                handlers::analyze::handle_tensions(ctx, *limit, mode).await?
-            }
-            AnalyzeCommands::ArcDrift { entity_type, limit } => {
-                handlers::analyze::handle_arc_drift(ctx, entity_type.as_deref(), *limit, mode)
-                    .await?
-            }
-            AnalyzeCommands::SituationReport => {
-                handlers::analyze::handle_situation_report(ctx, mode).await?
-            }
-            AnalyzeCommands::Dossier { character } => {
-                handlers::analyze::handle_dossier(ctx, character, mode).await?
-            }
-            AnalyzeCommands::ScenePrep { characters } => {
-                handlers::analyze::handle_scene_prep(ctx, characters, mode).await?
-            }
-        },
+        } => handlers::world::handle_graph(ctx, scope, *depth, output.as_deref(), mode).await?,
     }
 
     Ok(())
+}
+
+/// Dispatch create subcommands to their handlers.
+async fn handle_create(
+    cmd: &CreateCommands,
+    ctx: &crate::init::AppContext,
+    mode: OutputMode,
+) -> anyhow::Result<()> {
+    match cmd {
+        CreateCommands::Character {
+            name,
+            role,
+            description,
+            aliases,
+            profile,
+        } => {
+            handlers::entity::create_character(
+                ctx,
+                name,
+                role.as_deref(),
+                description.as_deref(),
+                aliases,
+                profile.as_deref(),
+                mode,
+            )
+            .await
+        }
+        CreateCommands::Location {
+            name,
+            parent,
+            description,
+            loc_type,
+        } => {
+            handlers::entity::create_location(
+                ctx,
+                name,
+                description.as_deref(),
+                parent.as_deref(),
+                loc_type.as_deref(),
+                mode,
+            )
+            .await
+        }
+        CreateCommands::Event {
+            title,
+            description,
+            sequence,
+            date,
+        } => {
+            handlers::entity::create_event(
+                ctx,
+                title,
+                description.as_deref(),
+                *sequence,
+                date.as_deref(),
+                mode,
+            )
+            .await
+        }
+        CreateCommands::Scene {
+            title,
+            event,
+            location,
+            summary,
+        } => {
+            handlers::entity::create_scene(ctx, title, event, location, summary.as_deref(), mode)
+                .await
+        }
+        CreateCommands::Knowledge {
+            character,
+            fact,
+            certainty,
+            method,
+            source,
+            event,
+        } => {
+            handlers::knowledge::record_knowledge(
+                ctx,
+                character,
+                fact,
+                certainty,
+                method.as_deref(),
+                source.as_deref(),
+                event.as_deref(),
+                mode,
+            )
+            .await
+        }
+        CreateCommands::Relationship {
+            from,
+            to,
+            rel_type,
+            subtype,
+            label,
+        } => {
+            handlers::relationship::create_relationship(
+                ctx,
+                from,
+                to,
+                rel_type,
+                subtype.as_deref(),
+                label.as_deref(),
+                mode,
+            )
+            .await
+        }
+        CreateCommands::Fact {
+            title,
+            description,
+            categories,
+            enforcement,
+        } => {
+            handlers::fact::create_fact(
+                ctx,
+                title,
+                description,
+                categories,
+                enforcement.as_deref(),
+                mode,
+            )
+            .await
+        }
+        CreateCommands::Note {
+            title,
+            body,
+            attach_to,
+        } => handlers::note::create_note(ctx, title, body, attach_to, mode).await,
+    }
 }

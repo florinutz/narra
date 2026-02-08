@@ -5,16 +5,10 @@ use anyhow::Result;
 use crate::cli::output::{
     output_json, output_json_list, print_error, print_success, print_table, OutputMode,
 };
+use crate::cli::resolve::bare_key;
 use crate::init::AppContext;
 use crate::models::{CertaintyLevel, KnowledgeCreate, KnowledgeStateCreate, LearningMethod};
 use crate::repository::KnowledgeRepository;
-
-/// Strip a known table prefix from an entity ID, returning the bare key.
-fn bare_key(id: &str, prefix: &str) -> String {
-    id.strip_prefix(&format!("{}:", prefix))
-        .unwrap_or(id)
-        .to_string()
-}
 
 pub async fn list_knowledge(
     ctx: &AppContext,
@@ -50,7 +44,6 @@ pub async fn list_knowledge(
             print_table(&["ID", "Target", "Certainty", "Method", "Event"], rows);
         }
         None => {
-            // List all knowledge entries (Phase 1 style)
             let knowledge = ctx.knowledge_repo.get_character_knowledge("").await;
             match knowledge {
                 Ok(items) => {
@@ -89,7 +82,6 @@ pub async fn record_knowledge(
 ) -> Result<()> {
     let char_key = bare_key(character, "character");
 
-    // First, create a knowledge record (Phase 1 fact)
     let knowledge = ctx
         .knowledge_repo
         .create_knowledge(KnowledgeCreate {
@@ -98,7 +90,6 @@ pub async fn record_knowledge(
         })
         .await?;
 
-    // Then create a knowledge state edge (Phase 3 provenance)
     let certainty_level = match certainty.to_lowercase().as_str() {
         "knows" => CertaintyLevel::Knows,
         "suspects" => CertaintyLevel::Suspects,
@@ -148,7 +139,6 @@ pub async fn record_knowledge(
             }
         }
         Err(e) => {
-            // Knowledge was still created even if state edge failed
             if mode == OutputMode::Json {
                 output_json(&knowledge);
             } else {

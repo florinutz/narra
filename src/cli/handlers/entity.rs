@@ -3,22 +3,135 @@
 use anyhow::Result;
 
 use crate::cli::output::{
-    output_json, output_json_list, print_error, print_success, print_table, OutputMode,
+    output_json, output_json_list, print_error, print_hint, print_success, print_table, OutputMode,
 };
+use crate::cli::resolve::{bare_key, entity_type_from_id, resolve_by_name};
 use crate::init::AppContext;
 use crate::models::{CharacterCreate, EventCreate, LocationCreate, SceneCreate};
 use crate::repository::EntityRepository;
 
 // =============================================================================
-// ID helpers
+// Unified Get — resolve by name or type:id
 // =============================================================================
 
-/// Strip a known table prefix from an entity ID, returning the bare key.
-/// e.g. "character:alice" -> "alice", "alice" -> "alice"
-fn bare_key(id: &str, prefix: &str) -> String {
-    id.strip_prefix(&format!("{}:", prefix))
-        .unwrap_or(id)
-        .to_string()
+pub async fn handle_get(ctx: &AppContext, input: &str, mode: OutputMode) -> Result<()> {
+    if let Some(entity_type) = entity_type_from_id(input) {
+        // Explicit type:id
+        let key = bare_key(input, entity_type);
+        return dispatch_get(ctx, entity_type, &key, mode).await;
+    }
+
+    // Try name resolution
+    let matches = resolve_by_name(&ctx.db, input).await?;
+
+    match matches.len() {
+        0 => {
+            print_error(&format!("No entity named '{}'", input));
+            print_hint(&format!("Try: narra find {}", input));
+        }
+        1 => {
+            let m = &matches[0];
+            let key = bare_key(&m.id, &m.entity_type);
+            dispatch_get(ctx, &m.entity_type, &key, mode).await?;
+        }
+        _ => {
+            print_error(&format!("Multiple matches for '{}'. Use a full ID:", input));
+            for m in &matches {
+                println!("  {} ({})", m.id, m.entity_type);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+async fn dispatch_get(
+    ctx: &AppContext,
+    entity_type: &str,
+    key: &str,
+    mode: OutputMode,
+) -> Result<()> {
+    match entity_type {
+        "character" => get_character(ctx, key, mode).await,
+        "location" => get_location(ctx, key, mode).await,
+        "event" => get_event(ctx, key, mode).await,
+        "scene" => get_scene(ctx, key, mode).await,
+        "universe_fact" => crate::cli::handlers::fact::get_fact(ctx, key, mode).await,
+        "note" => {
+            let notes = crate::models::note::get_note(&ctx.db, key).await?;
+            match notes {
+                Some(n) => output_json(&n),
+                None => print_error(&format!("Note '{}' not found", key)),
+            }
+            Ok(())
+        }
+        other => {
+            anyhow::bail!(
+                "Unsupported entity type '{}'. Supported: character, location, event, scene, universe_fact, note",
+                other
+            );
+        }
+    }
+}
+
+// =============================================================================
+// Unified List — any entity type by string
+// =============================================================================
+
+/// Normalize entity type string, accepting plural forms.
+fn normalize_type(s: &str) -> String {
+    match s.to_lowercase().as_str() {
+        "character" | "characters" => "character".to_string(),
+        "location" | "locations" => "location".to_string(),
+        "event" | "events" => "event".to_string(),
+        "scene" | "scenes" => "scene".to_string(),
+        "knowledge" => "knowledge".to_string(),
+        "relationship" | "relationships" => "relationship".to_string(),
+        "fact" | "facts" => "fact".to_string(),
+        "note" | "notes" => "note".to_string(),
+        _ => s.to_string(),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn handle_list(
+    ctx: &AppContext,
+    entity_type_str: &str,
+    character_filter: Option<&str>,
+    category_filter: Option<&str>,
+    enforcement_filter: Option<&str>,
+    entity_filter: Option<&str>,
+    limit: usize,
+    mode: OutputMode,
+) -> Result<()> {
+    let entity_type = normalize_type(entity_type_str);
+
+    match entity_type.as_str() {
+        "character" => list_characters(ctx, mode).await,
+        "location" => list_locations(ctx, mode).await,
+        "event" => list_events(ctx, mode).await,
+        "scene" => list_scenes(ctx, mode).await,
+        "knowledge" => {
+            crate::cli::handlers::knowledge::list_knowledge(ctx, character_filter, mode).await
+        }
+        "relationship" => {
+            crate::cli::handlers::relationship::list_relationships(ctx, character_filter, mode)
+                .await
+        }
+        "fact" => {
+            // Fact list (ignore filters for now — fact::list_facts doesn't take params yet)
+            let _ = (category_filter, enforcement_filter);
+            crate::cli::handlers::fact::list_facts(ctx, mode).await
+        }
+        "note" => crate::cli::handlers::note::list_notes(ctx, entity_filter, mode).await,
+        other => {
+            anyhow::bail!(
+                "Unknown entity type '{}'. Valid types: character, location, event, scene, knowledge, relationship, fact, note (limit: {})",
+                other,
+                limit
+            );
+        }
+    }
 }
 
 // =============================================================================
@@ -49,18 +162,12 @@ pub async fn list_characters(ctx: &AppContext, mode: OutputMode) -> Result<()> {
     Ok(())
 }
 
-pub async fn get_character(ctx: &AppContext, id: &str, mode: OutputMode) -> Result<()> {
+pub async fn get_character(ctx: &AppContext, id: &str, _mode: OutputMode) -> Result<()> {
     let key = bare_key(id, "character");
     let character = ctx.entity_repo.get_character(&key).await?;
 
     match character {
-        Some(c) => {
-            if mode == OutputMode::Json {
-                output_json(&c);
-            } else {
-                output_json(&c); // Pretty-printed JSON for human mode too
-            }
-        }
+        Some(c) => output_json(&c),
         None => print_error(&format!("Character '{}' not found", id)),
     }
     Ok(())
@@ -243,7 +350,6 @@ pub async fn create_event(
     };
 
     let date_val = date.map(|d| {
-        // Parse date string to SurrealDB Datetime
         let dt = chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d")
             .or_else(|_| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%dT%H:%M:%S"))
             .unwrap_or_else(|_| chrono::Utc::now().date_naive());
