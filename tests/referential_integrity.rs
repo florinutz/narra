@@ -204,7 +204,7 @@ async fn test_cascade_delete_character_removes_participations() {
 ///
 /// Verifies: DATA-03 REJECT behavior for scene.primary_location field
 #[tokio::test]
-#[ignore = "SurrealDB 2.6.0 experimental record_references only implements CASCADE, not REJECT - requires 3.x"]
+#[cfg(feature = "surrealdb3")]
 async fn test_reject_delete_location_with_scenes() {
     let harness = TestHarness::new().await;
 
@@ -261,7 +261,7 @@ async fn test_reject_delete_location_with_scenes() {
 ///
 /// Verifies: DATA-03 REJECT behavior for location.parent field
 #[tokio::test]
-#[ignore = "SurrealDB 2.6.0 experimental record_references only implements CASCADE, not REJECT - requires 3.x"]
+#[cfg(feature = "surrealdb3")]
 async fn test_reject_delete_location_parent() {
     let harness = TestHarness::new().await;
 
@@ -312,7 +312,7 @@ async fn test_reject_delete_location_parent() {
 ///
 /// Verifies: DATA-02 UNSET behavior for scene.secondary_locations array
 #[tokio::test]
-#[ignore = "SurrealDB 2.6.0 experimental record_references only implements CASCADE, not UNSET - requires 3.x"]
+#[cfg(feature = "surrealdb3")]
 async fn test_unset_location_from_secondary_locations() {
     let harness = TestHarness::new().await;
 
