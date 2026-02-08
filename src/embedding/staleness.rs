@@ -275,13 +275,17 @@ async fn regenerate_embedding_internal(
         entity_type,
         "character" | "knowledge" | "perceives" | "relates_to"
     ) {
+        #[derive(serde::Deserialize)]
+        struct EmbRow {
+            embedding: Option<Vec<f32>>,
+        }
         let mut result = db
-            .query("SELECT VALUE embedding FROM ONLY $ref")
+            .query("SELECT embedding FROM ONLY $ref")
             .bind(("ref", entity_ref.clone()))
             .await
             .map_err(|e| NarraError::Database(format!("Failed to fetch old embedding: {}", e)))?;
-        let embeddings: Vec<Option<Vec<f32>>> = result.take(0).unwrap_or_default();
-        embeddings.into_iter().next().flatten()
+        let row: Option<EmbRow> = result.take(0).unwrap_or(None);
+        row.and_then(|r| r.embedding)
     } else {
         None
     };
@@ -596,13 +600,19 @@ async fn regenerate_embedding_internal(
 
     // No-op detection: skip re-embedding if composite text hasn't changed
     {
+        #[derive(serde::Deserialize)]
+        struct CompositeRow {
+            composite_text: Option<String>,
+        }
         let mut r = db
-            .query("SELECT VALUE composite_text FROM ONLY $ref")
+            .query("SELECT composite_text FROM ONLY $ref")
             .bind(("ref", entity_ref.clone()))
             .await
             .map_err(|e| NarraError::Database(format!("Failed to fetch composite_text: {}", e)))?;
-        let vals: Vec<Option<String>> = r.take(0).unwrap_or_default();
-        let stored_composite = vals.into_iter().next().flatten();
+        let stored_composite: Option<String> = r
+            .take::<Option<CompositeRow>>(0)
+            .unwrap_or(None)
+            .and_then(|r| r.composite_text);
 
         if stored_composite.as_deref() == Some(&composite_text) {
             // Composite unchanged — clear stale flag without re-embedding
