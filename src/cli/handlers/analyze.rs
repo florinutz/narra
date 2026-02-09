@@ -6,11 +6,12 @@ use serde::Serialize;
 use crate::cli::output::{
     output_json, output_json_list, print_header, print_kv, print_table, OutputMode,
 };
-use crate::cli::resolve::resolve_by_name;
+use crate::cli::resolve::resolve_single;
 use crate::init::AppContext;
+use crate::repository::KnowledgeRepository;
 use crate::services::{
-    CentralityMetric, ClusteringService, CompositeIntelligenceService, EntityType,
-    GraphAnalyticsService, InfluenceService, IronyService,
+    generate_suggested_fix, CentralityMetric, ClusteringService, CompositeIntelligenceService,
+    EntityType, GraphAnalyticsService, InfluenceService, IronyService,
 };
 
 pub async fn handle_centrality(
@@ -828,6 +829,172 @@ pub async fn handle_thematic_gaps(
     Ok(())
 }
 
+pub async fn handle_temporal(
+    ctx: &AppContext,
+    character: &str,
+    event: Option<String>,
+    mode: OutputMode,
+    no_semantic: bool,
+) -> Result<()> {
+    let char_id = resolve_single(ctx, character, no_semantic).await?;
+    let char_key = char_id.split(':').nth(1).unwrap_or(&char_id).to_string();
+
+    let states = if let Some(event_ref) = event {
+        // Resolve event
+        let event_key = if event_ref.contains(':') {
+            event_ref
+                .split(':')
+                .nth(1)
+                .unwrap_or(&event_ref)
+                .to_string()
+        } else {
+            // Fuzzy search for event
+            let search_svc = if no_semantic {
+                None
+            } else {
+                Some(ctx.search_service.as_ref())
+            };
+            let filter = crate::services::SearchFilter {
+                entity_types: vec![EntityType::Event],
+                limit: Some(1),
+                ..Default::default()
+            };
+            let results = if let Some(svc) = search_svc {
+                svc.fuzzy_search(&event_ref, 0.8, filter).await?
+            } else {
+                vec![]
+            };
+            match results.first() {
+                Some(r) => r.id.split(':').nth(1).unwrap_or(&r.id).to_string(),
+                None => anyhow::bail!("No event found for '{}'", event_ref),
+            }
+        };
+        ctx.knowledge_repo
+            .get_knowledge_at_event(&char_key, &event_key)
+            .await
+            .map_err(|e| anyhow::anyhow!("Temporal knowledge query failed: {}", e))?
+    } else {
+        ctx.knowledge_repo
+            .get_character_knowledge_states(&char_key)
+            .await
+            .map_err(|e| anyhow::anyhow!("Knowledge states query failed: {}", e))?
+    };
+
+    if mode == OutputMode::Json {
+        output_json_list(&states);
+    } else {
+        println!(
+            "Knowledge states for {} ({} entries):",
+            char_id,
+            states.len()
+        );
+        let rows: Vec<Vec<String>> = states
+            .iter()
+            .map(|s| {
+                vec![
+                    s.target.to_string(),
+                    format!("{:?}", s.certainty),
+                    format!("{:?}", s.learning_method),
+                    s.event
+                        .as_ref()
+                        .map(|e: &surrealdb::RecordId| e.to_string())
+                        .unwrap_or_else(|| "-".to_string()),
+                ]
+            })
+            .collect();
+        print_table(&["Target", "Certainty", "Method", "Learned At"], rows);
+    }
+
+    Ok(())
+}
+
+pub async fn handle_contradictions(
+    ctx: &AppContext,
+    entity: &str,
+    depth: usize,
+    mode: OutputMode,
+    no_semantic: bool,
+) -> Result<()> {
+    let entity_id = resolve_single(ctx, entity, no_semantic).await?;
+
+    let (violations, entities_checked) = ctx
+        .consistency_service
+        .investigate_contradictions(&entity_id, depth)
+        .await
+        .map_err(|e| anyhow::anyhow!("Contradiction investigation failed: {}", e))?;
+
+    if mode == OutputMode::Json {
+        #[derive(Serialize)]
+        struct ContradictionReport {
+            entity_id: String,
+            depth: usize,
+            entities_checked: usize,
+            violations: Vec<ContradictionRow>,
+        }
+        #[derive(Serialize)]
+        struct ContradictionRow {
+            severity: String,
+            violation_type: String,
+            message: String,
+            suggested_fix: Option<String>,
+        }
+        let rows: Vec<ContradictionRow> = violations
+            .iter()
+            .map(|v| ContradictionRow {
+                severity: format!("{:?}", v.severity).to_uppercase(),
+                violation_type: classify_violation(v),
+                message: v.message.clone(),
+                suggested_fix: generate_suggested_fix(v),
+            })
+            .collect();
+        output_json(&ContradictionReport {
+            entity_id,
+            depth,
+            entities_checked,
+            violations: rows,
+        });
+    } else {
+        print_header(&format!(
+            "Contradiction Investigation: {} (depth {}, {} entities checked)",
+            entity_id, depth, entities_checked
+        ));
+
+        if violations.is_empty() {
+            println!("  No contradictions found.");
+        } else {
+            println!("  {} issue(s) found:\n", violations.len());
+            let rows: Vec<Vec<String>> = violations
+                .iter()
+                .map(|v| {
+                    vec![
+                        format!("{:?}", v.severity).to_uppercase(),
+                        classify_violation(v),
+                        v.message.clone(),
+                        generate_suggested_fix(v).unwrap_or_else(|| "-".to_string()),
+                    ]
+                })
+                .collect();
+            print_table(&["Severity", "Type", "Message", "Fix"], rows);
+        }
+    }
+
+    Ok(())
+}
+
+/// Classify a violation into a type category based on message content.
+fn classify_violation(v: &crate::services::Violation) -> String {
+    if v.message.contains("timeline") || v.message.contains("before learning") {
+        "timeline".into()
+    } else if v.message.contains("relationship")
+        || v.message.contains("Circular")
+        || v.message.contains("Asymmetric")
+    {
+        "relationship".into()
+    } else {
+        "fact".into()
+    }
+}
+
 pub async fn handle_impact(
     ctx: &AppContext,
     entity: &str,
@@ -835,26 +1002,7 @@ pub async fn handle_impact(
     mode: OutputMode,
     no_semantic: bool,
 ) -> Result<()> {
-    let entity_id = if entity.contains(':') {
-        entity.to_string()
-    } else {
-        let search_svc = if no_semantic {
-            None
-        } else {
-            Some(ctx.search_service.as_ref())
-        };
-        let matches = resolve_by_name(&ctx.db, entity, search_svc).await?;
-        match matches.len() {
-            0 => anyhow::bail!("No entity found for '{}'", entity),
-            1 => matches[0].id.clone(),
-            _ => {
-                for m in &matches {
-                    eprintln!("  {} ({})", m.id, m.name);
-                }
-                anyhow::bail!("Ambiguous name. Use a full ID.");
-            }
-        }
-    };
+    let entity_id = resolve_single(ctx, entity, no_semantic).await?;
 
     let desc = description.as_deref().unwrap_or("general change");
     let analysis = ctx

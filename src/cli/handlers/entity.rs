@@ -5,7 +5,9 @@ use anyhow::Result;
 use crate::cli::output::{
     output_json, output_json_list, print_error, print_hint, print_success, print_table, OutputMode,
 };
-use crate::cli::resolve::{bare_key, entity_type_from_id, resolve_by_name, ResolutionMethod};
+use crate::cli::resolve::{
+    bare_key, entity_type_from_id, resolve_by_name, resolve_single, ResolutionMethod,
+};
 use crate::init::AppContext;
 use crate::models::{CharacterCreate, EventCreate, LocationCreate, SceneCreate};
 use crate::repository::EntityRepository;
@@ -237,9 +239,14 @@ pub async fn handle_list(
                 .await
         }
         "fact" => {
-            // Fact list (ignore filters for now — fact::list_facts doesn't take params yet)
-            let _ = (category_filter, enforcement_filter);
-            crate::cli::handlers::fact::list_facts(ctx, mode).await
+            crate::cli::handlers::fact::list_facts(
+                ctx,
+                entity_filter,
+                category_filter,
+                enforcement_filter,
+                mode,
+            )
+            .await
         }
         "note" => crate::cli::handlers::note::list_notes(ctx, entity_filter, mode).await,
         other => {
@@ -580,7 +587,7 @@ pub async fn handle_protect(
     mode: OutputMode,
     no_semantic: bool,
 ) -> Result<()> {
-    let entity_id = resolve_to_id(ctx, entity, no_semantic).await?;
+    let entity_id = resolve_single(ctx, entity, no_semantic).await?;
     ctx.impact_service.protect_entity(&entity_id).await;
 
     if mode == OutputMode::Json {
@@ -601,7 +608,7 @@ pub async fn handle_unprotect(
     mode: OutputMode,
     no_semantic: bool,
 ) -> Result<()> {
-    let entity_id = resolve_to_id(ctx, entity, no_semantic).await?;
+    let entity_id = resolve_single(ctx, entity, no_semantic).await?;
     ctx.impact_service.unprotect_entity(&entity_id).await;
 
     if mode == OutputMode::Json {
@@ -613,26 +620,4 @@ pub async fn handle_unprotect(
         print_success(&format!("Removed protection from '{}'", entity_id));
     }
     Ok(())
-}
-
-async fn resolve_to_id(ctx: &AppContext, input: &str, no_semantic: bool) -> Result<String> {
-    if input.contains(':') {
-        return Ok(input.to_string());
-    }
-    let search_svc = if no_semantic {
-        None
-    } else {
-        Some(ctx.search_service.as_ref())
-    };
-    let matches = resolve_by_name(&ctx.db, input, search_svc).await?;
-    match matches.len() {
-        0 => anyhow::bail!("No entity found for '{}'", input),
-        1 => Ok(matches[0].id.clone()),
-        _ => {
-            for m in &matches {
-                eprintln!("  {} ({})", m.id, m.name);
-            }
-            anyhow::bail!("Ambiguous name. Use a full ID.");
-        }
-    }
 }

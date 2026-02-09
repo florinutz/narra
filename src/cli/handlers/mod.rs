@@ -12,5 +12,6 @@ pub mod note;
 pub mod path;
 pub mod perception;
 pub mod relationship;
+pub mod session;
 pub mod utility;
 pub mod world;

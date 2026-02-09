@@ -28,8 +28,38 @@ fn parse_enforcement(s: &str) -> EnforcementLevel {
     }
 }
 
-pub async fn list_facts(ctx: &AppContext, mode: OutputMode) -> Result<()> {
-    let facts = fact::list_facts(&ctx.db).await?;
+pub async fn list_facts(
+    ctx: &AppContext,
+    entity_filter: Option<&str>,
+    category_filter: Option<&str>,
+    enforcement_filter: Option<&str>,
+    mode: OutputMode,
+) -> Result<()> {
+    let mut facts = if let Some(entity_id) = entity_filter {
+        // Entity filter requires full type:key format
+        if !entity_id.contains(':') {
+            anyhow::bail!("--entity requires type:key format (e.g., character:alice)");
+        }
+        fact::get_entity_facts(&ctx.db, entity_id).await?
+    } else {
+        fact::list_facts(&ctx.db).await?
+    };
+
+    // Apply in-memory category filter
+    if let Some(cat) = category_filter {
+        let target_cat = parse_category(cat);
+        facts.retain(|f| {
+            f.categories
+                .iter()
+                .any(|c| format!("{:?}", c) == format!("{:?}", target_cat))
+        });
+    }
+
+    // Apply in-memory enforcement filter
+    if let Some(enf) = enforcement_filter {
+        let target_enf = parse_enforcement(enf);
+        facts.retain(|f| f.enforcement_level == target_enf);
+    }
 
     if mode == OutputMode::Json {
         output_json_list(&facts);

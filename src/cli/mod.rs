@@ -196,6 +196,10 @@ pub enum Commands {
     #[command(subcommand)]
     World(WorldCommands),
 
+    /// Session management (context, pin, unpin)
+    #[command(subcommand)]
+    Session(SessionCommands),
+
     // =========================================================================
     // Legacy subcommands kept for backward compatibility (hidden)
     // =========================================================================
@@ -424,6 +428,28 @@ pub enum WorldCommands {
         #[arg(long, short)]
         output: Option<PathBuf>,
     },
+    /// Create baseline arc snapshots for entities with embeddings
+    BaselineArcs {
+        /// Entity type filter (character or knowledge; omit for both)
+        #[arg(long, name = "type")]
+        entity_type: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum SessionCommands {
+    /// Show session context (hot entities, pending decisions, world overview)
+    Context,
+    /// Pin an entity to persistent session context
+    Pin {
+        /// Entity ID or name
+        entity: String,
+    },
+    /// Unpin an entity from session context
+    Unpin {
+        /// Entity ID or name
+        entity: String,
+    },
 }
 
 // =============================================================================
@@ -493,6 +519,22 @@ pub enum AnalyzeCommands {
         /// Expected types per cluster (comma-separated)
         #[arg(long, value_delimiter = ',')]
         expected_types: Option<Vec<String>>,
+    },
+    /// Temporal knowledge: what a character knows at a point in time
+    Temporal {
+        /// Character (ID or name)
+        character: String,
+        /// Anchor to a specific event (ID or name)
+        #[arg(long)]
+        event: Option<String>,
+    },
+    /// Investigate contradictions across connected entities
+    Contradictions {
+        /// Entity (ID or name)
+        entity: String,
+        /// Graph traversal depth
+        #[arg(long, default_value = "3")]
+        depth: usize,
     },
     /// Perception gap: how wrong is observer about target
     PerceptionGap {
@@ -943,6 +985,22 @@ pub async fn execute(
                 depth,
                 output,
             } => handlers::world::handle_graph(ctx, scope, *depth, output.as_deref(), mode).await?,
+            WorldCommands::BaselineArcs { entity_type } => {
+                handlers::world::handle_baseline_arcs(ctx, entity_type.as_deref(), mode).await?
+            }
+        },
+
+        // =====================================================================
+        // Session commands
+        // =====================================================================
+        Commands::Session(cmd) => match cmd {
+            SessionCommands::Context => handlers::session::handle_context(ctx, mode).await?,
+            SessionCommands::Pin { entity } => {
+                handlers::session::handle_pin(ctx, entity, mode, no_semantic).await?
+            }
+            SessionCommands::Unpin { entity } => {
+                handlers::session::handle_unpin(ctx, entity, mode, no_semantic).await?
+            }
         },
 
         // =====================================================================
@@ -989,6 +1047,14 @@ pub async fn execute(
                     mode,
                 )
                 .await?
+            }
+            AnalyzeCommands::Temporal { character, event } => {
+                handlers::analyze::handle_temporal(ctx, character, event.clone(), mode, no_semantic)
+                    .await?
+            }
+            AnalyzeCommands::Contradictions { entity, depth } => {
+                handlers::analyze::handle_contradictions(ctx, entity, *depth, mode, no_semantic)
+                    .await?
             }
             AnalyzeCommands::PerceptionGap { observer, target } => {
                 handlers::perception::handle_perception_gap(
@@ -1221,7 +1287,20 @@ pub async fn execute(
         },
 
         Commands::Fact(cmd) => match cmd {
-            FactCommands::List { .. } => handlers::fact::list_facts(ctx, mode).await?,
+            FactCommands::List {
+                category,
+                enforcement,
+                ..
+            } => {
+                handlers::fact::list_facts(
+                    ctx,
+                    None,
+                    category.as_deref(),
+                    enforcement.as_deref(),
+                    mode,
+                )
+                .await?
+            }
             FactCommands::Get { id } => handlers::fact::get_fact(ctx, id, mode).await?,
             FactCommands::Create {
                 title,

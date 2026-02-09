@@ -6,7 +6,9 @@ use anyhow::Result;
 use colored::Colorize;
 use serde::{Deserialize, Serialize};
 
-use crate::cli::output::{output_json, print_error, print_success, print_table, OutputMode};
+use crate::cli::output::{
+    output_json, print_error, print_header, print_kv, print_success, print_table, OutputMode,
+};
 use crate::cli::resolve::bare_key;
 use crate::init::AppContext;
 
@@ -558,6 +560,117 @@ pub async fn handle_graph(
         output_json(&result);
     } else if output.is_none() {
         println!("{}", mermaid);
+    }
+
+    Ok(())
+}
+
+// =============================================================================
+// Baseline Arc Snapshots
+// =============================================================================
+
+pub async fn handle_baseline_arcs(
+    ctx: &AppContext,
+    entity_type: Option<&str>,
+    mode: OutputMode,
+) -> Result<()> {
+    // Validate entity_type if provided
+    if let Some(et) = entity_type {
+        if !matches!(et, "character" | "knowledge") {
+            anyhow::bail!(
+                "Invalid entity type '{}'. Must be 'character' or 'knowledge'.",
+                et
+            );
+        }
+    }
+
+    let types_to_process: Vec<&str> = match entity_type {
+        Some(et) => vec![et],
+        None => vec!["character", "knowledge"],
+    };
+
+    let mut total_created = 0usize;
+    let mut total_skipped = 0usize;
+
+    for etype in &types_to_process {
+        // Fetch entities that have embeddings
+        let fetch_query = format!(
+            "SELECT id, embedding FROM {} WHERE embedding IS NOT NONE",
+            etype
+        );
+
+        let mut response = ctx.db.query(&fetch_query).await?;
+
+        #[derive(Deserialize)]
+        struct EntityWithEmbedding {
+            id: surrealdb::RecordId,
+            embedding: Vec<f32>,
+        }
+
+        let entities: Vec<EntityWithEmbedding> = response.take(0).unwrap_or_default();
+
+        for entity in &entities {
+            let entity_id = entity.id.to_string();
+
+            // Check if snapshot already exists
+            let mut count_response = ctx
+                .db
+                .query("SELECT count() AS cnt FROM arc_snapshot WHERE entity_id = $eid GROUP ALL")
+                .bind(("eid", entity.id.clone()))
+                .await?;
+
+            #[derive(Deserialize)]
+            struct ArcCount {
+                cnt: i64,
+            }
+
+            let count: Option<ArcCount> = count_response.take(0).unwrap_or(None);
+            let existing = count.map(|c| c.cnt).unwrap_or(0);
+
+            if existing > 0 {
+                total_skipped += 1;
+                continue;
+            }
+
+            // Create baseline snapshot
+            if let Err(e) = ctx
+                .db
+                .query(
+                    "CREATE arc_snapshot SET entity_id = $eid, entity_type = $etype, embedding = $embedding",
+                )
+                .bind(("eid", entity.id.clone()))
+                .bind(("etype", etype.to_string()))
+                .bind(("embedding", entity.embedding.clone()))
+                .await
+            {
+                eprintln!("Warning: Failed to create snapshot for {}: {}", entity_id, e);
+                continue;
+            }
+
+            total_created += 1;
+        }
+    }
+
+    if mode == OutputMode::Json {
+        output_json(&serde_json::json!({
+            "created": total_created,
+            "skipped": total_skipped,
+            "entity_types": types_to_process,
+        }));
+    } else {
+        print_header("Baseline Arc Snapshots");
+        print_kv("Created", &total_created.to_string());
+        print_kv(
+            "Skipped (already had snapshots)",
+            &total_skipped.to_string(),
+        );
+        if total_created > 0 {
+            print_success(&format!("Created {} baseline snapshots", total_created));
+        } else if total_skipped > 0 {
+            println!("  All entities already have snapshots.");
+        } else {
+            println!("  No entities with embeddings found. Run 'narra world backfill' first.");
+        }
     }
 
     Ok(())

@@ -5,6 +5,7 @@ use serde::Deserialize;
 use std::sync::Arc;
 use surrealdb::{engine::local::Db, Surreal};
 
+use crate::init::AppContext;
 use crate::services::{SearchFilter, SearchService};
 
 /// Strip a known table prefix from an entity ID, returning the bare key.
@@ -34,6 +35,34 @@ pub fn normalize_entity_id(input: &str, expected_type: Option<&str>) -> String {
         format!("{}:{}", entity_type, input)
     } else {
         input.to_string()
+    }
+}
+
+/// Resolve an entity name or ID to a single entity ID.
+///
+/// If `input` already contains ':', it's treated as a full ID and returned as-is.
+/// Otherwise, resolves via name lookup (exact, fuzzy, semantic).
+/// Errors if zero or multiple matches found.
+pub async fn resolve_single(ctx: &AppContext, input: &str, no_semantic: bool) -> Result<String> {
+    if input.contains(':') {
+        return Ok(input.to_string());
+    }
+    let search_svc = if no_semantic {
+        None
+    } else {
+        Some(ctx.search_service.as_ref())
+    };
+    let matches = resolve_by_name(&ctx.db, input, search_svc).await?;
+    match matches.len() {
+        0 => anyhow::bail!("No entity found for '{}'", input),
+        1 => Ok(matches[0].id.clone()),
+        _ => {
+            eprintln!("Ambiguous name '{}'. Matches:", input);
+            for m in &matches {
+                eprintln!("  {} ({})", m.id, m.name);
+            }
+            anyhow::bail!("Use a full ID (type:key) to disambiguate");
+        }
     }
 }
 

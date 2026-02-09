@@ -3,33 +3,9 @@
 use anyhow::Result;
 
 use crate::cli::output::{output_json, output_json_list, print_table, OutputMode};
-use crate::cli::resolve::resolve_by_name;
+use crate::cli::resolve::resolve_single;
 use crate::init::AppContext;
 use crate::services::MermaidGraphService;
-
-/// Resolve a single entity, returning its full ID (table:key).
-async fn resolve_single(ctx: &AppContext, input: &str, no_semantic: bool) -> Result<String> {
-    if input.contains(':') {
-        return Ok(input.to_string());
-    }
-    let search_svc = if no_semantic {
-        None
-    } else {
-        Some(ctx.search_service.as_ref())
-    };
-    let matches = resolve_by_name(&ctx.db, input, search_svc).await?;
-    match matches.len() {
-        0 => anyhow::bail!("No entity found for '{}'", input),
-        1 => Ok(matches[0].id.clone()),
-        _ => {
-            eprintln!("Ambiguous name '{}'. Matches:", input);
-            for m in &matches {
-                eprintln!("  {} ({})", m.id, m.name);
-            }
-            anyhow::bail!("Use a full ID (type:key) to disambiguate");
-        }
-    }
-}
 
 pub async fn handle_path(
     ctx: &AppContext,
