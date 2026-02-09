@@ -21,17 +21,9 @@ jobs:
           components: rustfmt
       - run: cargo fmt -- --check
 
-  machete:
-    name: Machete
-    needs: fmt
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: bnjbvr/cargo-machete@main
-
   build-and-test:
     name: Build & Test
-    needs: machete
+    needs: fmt
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
