@@ -3,6 +3,7 @@
 pub mod analyze;
 pub mod arc;
 pub mod ask;
+pub mod batch;
 pub mod entity;
 pub mod explore;
 pub mod fact;

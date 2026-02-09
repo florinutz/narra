@@ -4,7 +4,7 @@ pub mod handlers;
 pub mod output;
 pub mod resolve;
 
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 use std::path::PathBuf;
 
 use output::{DetailLevel, OutputMode};
@@ -76,8 +76,8 @@ pub enum Commands {
     /// Search across all entities (hybrid by default)
     #[command(alias = "search")]
     Find {
-        /// Search query
-        query: String,
+        /// Search query (required for default search, optional with subcommands)
+        query: Option<String>,
         /// Use keyword search only (no semantic/vector)
         #[arg(long)]
         keyword_only: bool,
@@ -90,6 +90,8 @@ pub enum Commands {
         /// Maximum results
         #[arg(long, default_value = "20")]
         limit: usize,
+        #[command(subcommand)]
+        subcommand: Option<FindCommands>,
     },
 
     /// Find shortest connection paths between entities
@@ -199,6 +201,21 @@ pub enum Commands {
     /// Session management (context, pin, unpin)
     #[command(subcommand)]
     Session(SessionCommands),
+
+    /// Batch-create entities from YAML (stdin or --file)
+    Batch {
+        /// Entity type: character, location, event, relationship
+        entity_type: String,
+        /// Read from file instead of stdin
+        #[arg(long)]
+        file: Option<String>,
+    },
+
+    /// Generate shell completions
+    Completions {
+        /// Shell type (bash, zsh, fish, elvish, powershell)
+        shell: clap_complete::Shell,
+    },
 
     // =========================================================================
     // Legacy subcommands kept for backward compatibility (hidden)
@@ -360,6 +377,25 @@ pub enum CreateCommands {
         #[arg(long)]
         label: Option<String>,
     },
+    /// Record a character's perception of another
+    Perception {
+        #[arg(long)]
+        observer: String,
+        #[arg(long)]
+        target: String,
+        #[arg(long)]
+        perception: String,
+        #[arg(long)]
+        feelings: Option<String>,
+        #[arg(long)]
+        tension: Option<i32>,
+        #[arg(long, value_delimiter = ',')]
+        rel_types: Vec<String>,
+        #[arg(long)]
+        subtype: Option<String>,
+        #[arg(long)]
+        history: Option<String>,
+    },
     /// Create a universe fact
     Fact {
         #[arg(long)]
@@ -379,6 +415,79 @@ pub enum CreateCommands {
         body: String,
         #[arg(long, value_delimiter = ',')]
         attach_to: Vec<String>,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum FindCommands {
+    /// Cross-type semantic search by meaning
+    Join {
+        /// Search query
+        query: String,
+        /// Filter by entity type
+        #[arg(long, name = "type")]
+        entity_type: Option<String>,
+        /// Maximum results
+        #[arg(long, default_value = "10")]
+        limit: usize,
+    },
+    /// Semantic search within knowledge/facts
+    Knowledge {
+        /// Search query
+        query: String,
+        /// Filter by character (name or ID)
+        #[arg(long)]
+        character: Option<String>,
+        /// Maximum results
+        #[arg(long, default_value = "10")]
+        limit: usize,
+    },
+    /// Graph proximity + semantic similarity search
+    Graph {
+        /// Entity to center search on (name or ID)
+        entity: String,
+        /// Search query
+        query: String,
+        /// Graph traversal depth
+        #[arg(long, default_value = "2")]
+        hops: usize,
+        /// Filter by entity type
+        #[arg(long, name = "type")]
+        entity_type: Option<String>,
+        /// Maximum results
+        #[arg(long, default_value = "10")]
+        limit: usize,
+    },
+    /// Search perceptions/perspectives by meaning
+    Perspectives {
+        /// Search query
+        query: String,
+        /// Filter by observer (name or ID)
+        #[arg(long)]
+        observer: Option<String>,
+        /// Filter by target (name or ID)
+        #[arg(long)]
+        target: Option<String>,
+        /// Maximum results
+        #[arg(long, default_value = "10")]
+        limit: usize,
+    },
+    /// Find relationships similar to a reference pair
+    #[command(alias = "similar")]
+    SimilarDynamics {
+        /// Source observer (name or ID)
+        observer: String,
+        /// Source target (name or ID)
+        target: String,
+        /// Bias search toward this text
+        #[arg(long)]
+        bias: Option<String>,
+        /// Edge type filter (perceives, relates_to)
+        #[arg(long)]
+        edge_type: Option<String>,
+        /// Maximum results
+        #[arg(long, default_value = "10")]
+        limit: usize,
     },
 }
 
@@ -877,19 +986,101 @@ pub async fn execute(
             semantic_only,
             entity_type,
             limit,
-        } => {
-            handlers::find::handle_find(
-                ctx,
-                query,
-                *keyword_only,
-                *semantic_only,
-                no_semantic,
-                entity_type.as_deref(),
-                *limit,
-                mode,
-            )
-            .await?
-        }
+            subcommand,
+        } => match subcommand {
+            Some(FindCommands::Join {
+                query: q,
+                entity_type: et,
+                limit: l,
+            }) => handlers::find::handle_semantic_join(ctx, q, et.as_deref(), *l, mode).await?,
+            Some(FindCommands::Knowledge {
+                query: q,
+                character,
+                limit: l,
+            }) => {
+                handlers::find::handle_semantic_knowledge(
+                    ctx,
+                    q,
+                    character.as_deref(),
+                    *l,
+                    mode,
+                    no_semantic,
+                )
+                .await?
+            }
+            Some(FindCommands::Graph {
+                entity,
+                query: q,
+                hops,
+                entity_type: et,
+                limit: l,
+            }) => {
+                handlers::find::handle_semantic_graph_search(
+                    ctx,
+                    entity,
+                    q,
+                    *hops,
+                    et.as_deref(),
+                    *l,
+                    mode,
+                    no_semantic,
+                )
+                .await?
+            }
+            Some(FindCommands::Perspectives {
+                query: q,
+                observer,
+                target,
+                limit: l,
+            }) => {
+                handlers::perception::handle_perspective_search(
+                    ctx,
+                    q,
+                    observer.as_deref(),
+                    target.as_deref(),
+                    *l,
+                    mode,
+                    no_semantic,
+                )
+                .await?
+            }
+            Some(FindCommands::SimilarDynamics {
+                observer,
+                target,
+                bias,
+                edge_type,
+                limit: l,
+            }) => {
+                handlers::relationship::handle_similar_relationships(
+                    ctx,
+                    observer,
+                    target,
+                    edge_type.as_deref(),
+                    bias.as_deref(),
+                    *l,
+                    mode,
+                    no_semantic,
+                )
+                .await?
+            }
+            None => {
+                let q = query.as_deref().unwrap_or("");
+                if q.is_empty() {
+                    anyhow::bail!("Search query is required. Usage: narra find \"query\" or narra find <subcommand>");
+                }
+                handlers::find::handle_find(
+                    ctx,
+                    q,
+                    *keyword_only,
+                    *semantic_only,
+                    no_semantic,
+                    entity_type.as_deref(),
+                    *limit,
+                    mode,
+                )
+                .await?
+            }
+        },
 
         Commands::Explore {
             entity,
@@ -1002,6 +1193,20 @@ pub async fn execute(
                 handlers::session::handle_unpin(ctx, entity, mode, no_semantic).await?
             }
         },
+
+        // =====================================================================
+        // Batch create
+        // =====================================================================
+        Commands::Batch { entity_type, file } => {
+            handlers::batch::handle_batch_create(ctx, entity_type, file.as_deref(), mode).await?
+        }
+
+        // =====================================================================
+        // Shell completions (no AppContext needed, but we have it here)
+        // =====================================================================
+        Commands::Completions { shell } => {
+            clap_complete::generate(*shell, &mut Cli::command(), "narra", &mut std::io::stdout());
+        }
 
         // =====================================================================
         // Analyze commands (unchanged)
@@ -1488,6 +1693,30 @@ async fn handle_create(
                 rel_type,
                 subtype.as_deref(),
                 label.as_deref(),
+                mode,
+            )
+            .await
+        }
+        CreateCommands::Perception {
+            observer,
+            target,
+            perception,
+            feelings,
+            tension,
+            rel_types,
+            subtype,
+            history,
+        } => {
+            handlers::perception::create_perception(
+                ctx,
+                observer,
+                target,
+                perception,
+                feelings.as_deref(),
+                *tension,
+                rel_types,
+                subtype.as_deref(),
+                history.as_deref(),
                 mode,
             )
             .await

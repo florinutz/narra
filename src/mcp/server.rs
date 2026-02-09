@@ -29,7 +29,7 @@ use crate::session::SessionStateManager;
 use crate::mcp::tools::export::{ExportRequest, ExportResponse};
 use crate::mcp::tools::graph::{GraphRequest, GraphResponse};
 use crate::mcp::{
-    MutationRequest, MutationResponse, QueryRequest, QueryResponse, SessionRequest, SessionResponse,
+    MutationInput, MutationResponse, QueryInput, QueryResponse, SessionInput, SessionResponse,
 };
 
 /// MCP server for Narra world state.
@@ -115,7 +115,7 @@ impl NarraServer {
     #[instrument(name = "mcp.query", skip_all)]
     pub async fn query(
         &self,
-        request: Parameters<QueryRequest>,
+        request: Parameters<QueryInput>,
     ) -> Result<Json<QueryResponse>, String> {
         self.handle_query(request).await.map(Json)
     }
@@ -126,7 +126,7 @@ impl NarraServer {
     #[instrument(name = "mcp.mutate", skip_all)]
     pub async fn mutate(
         &self,
-        request: Parameters<MutationRequest>,
+        request: Parameters<MutationInput>,
     ) -> Result<Json<MutationResponse>, String> {
         self.handle_mutate(request).await.map(Json)
     }
@@ -137,7 +137,7 @@ impl NarraServer {
     #[instrument(name = "mcp.session", skip_all)]
     pub async fn session(
         &self,
-        request: Parameters<SessionRequest>,
+        request: Parameters<SessionInput>,
     ) -> Result<Json<SessionResponse>, String> {
         self.handle_session(request).await.map(Json)
     }

@@ -7,7 +7,8 @@ use colored::Colorize;
 use serde::{Deserialize, Serialize};
 
 use crate::cli::output::{
-    output_json, print_error, print_header, print_kv, print_success, print_table, OutputMode,
+    create_spinner, output_json, print_error, print_header, print_kv, print_success, print_table,
+    OutputMode,
 };
 use crate::cli::resolve::bare_key;
 use crate::init::AppContext;
@@ -233,10 +234,12 @@ pub async fn handle_backfill(
 ) -> Result<()> {
     use crate::embedding::BackfillService;
 
-    println!("Starting embedding backfill...");
+    let spinner = create_spinner("Generating embeddings...");
 
     let backfill = BackfillService::new(ctx.db.clone(), ctx.embedding_service.clone());
     let stats = backfill.backfill_all().await?;
+
+    spinner.finish_and_clear();
 
     if mode == OutputMode::Json {
         output_json(&stats);
@@ -268,8 +271,12 @@ pub async fn handle_export(
 ) -> Result<()> {
     use crate::services::export::ExportService;
 
+    let spinner = create_spinner("Exporting world data...");
+
     let export_service = ExportService::new(ctx.db.clone());
     let import = export_service.export_world().await?;
+
+    spinner.finish_and_clear();
 
     let yaml = serde_yaml_ng::to_string(&import)?;
 
@@ -385,11 +392,15 @@ pub async fn handle_import(
         return Ok(());
     }
 
+    let spinner = create_spinner("Importing world data...");
+
     let import_service = ImportService::new(ctx.db.clone(), ctx.staleness_manager.clone());
     let result = import_service
         .execute_import(import, conflict_mode)
         .await
         .map_err(|e| anyhow::anyhow!("Import failed: {}", e))?;
+
+    spinner.finish_and_clear();
 
     match mode {
         OutputMode::Json => {

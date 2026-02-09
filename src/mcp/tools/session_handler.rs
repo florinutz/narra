@@ -2,7 +2,7 @@
 
 use crate::mcp::{
     HotEntityInfo, NarraServer, PendingDecisionInfo as PendingDecisionInfoType, PinResult,
-    SessionContextData, SessionRequest, SessionResponse, WorldOverviewInfo,
+    SessionContextData, SessionInput, SessionRequest, SessionResponse, WorldOverviewInfo,
 };
 use crate::session::generate_startup_context;
 use rmcp::handler::server::wrapper::Parameters;
@@ -11,8 +11,17 @@ impl NarraServer {
     /// Handler for consolidated session tool - dispatches to specific operations.
     pub async fn handle_session(
         &self,
-        Parameters(request): Parameters<SessionRequest>,
+        Parameters(input): Parameters<SessionInput>,
     ) -> Result<SessionResponse, String> {
+        // Reconstruct the full request object for deserialization
+        let mut full_request = serde_json::Map::new();
+        full_request.insert("operation".to_string(), serde_json::json!(input.operation));
+        full_request.extend(input.params);
+
+        // Deserialize to SessionRequest
+        let request: SessionRequest = serde_json::from_value(serde_json::Value::Object(full_request))
+            .map_err(|e| format!("Invalid session parameters: {}", e))?;
+
         match request {
             SessionRequest::GetContext { force_full: _ } => {
                 let ctx = self.handle_get_context_session().await?;

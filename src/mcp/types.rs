@@ -857,6 +857,42 @@ pub struct EntityResult {
     pub last_modified: Option<String>,
 }
 
+// =============================================================================
+// MCP Tool Input Wrappers
+// Free-form parameter pattern for MCP compatibility.
+// Top-level schema is type: "object", params are validated at runtime.
+// =============================================================================
+
+/// Free-form input for query tool (runtime deserialization to QueryRequest).
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct QueryInput {
+    /// Operation name (lookup, search, semantic_search, etc.)
+    pub operation: String,
+    /// Operation-specific parameters (validated at runtime)
+    #[serde(flatten)]
+    pub params: serde_json::Map<String, serde_json::Value>,
+}
+
+/// Free-form input for mutate tool (runtime deserialization to MutationRequest).
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct MutationInput {
+    /// Operation name (create_character, update, delete, etc.)
+    pub operation: String,
+    /// Operation-specific parameters (validated at runtime)
+    #[serde(flatten)]
+    pub params: serde_json::Map<String, serde_json::Value>,
+}
+
+/// Free-form input for session tool (runtime deserialization to SessionRequest).
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SessionInput {
+    /// Operation name (get_context, pin_entity, unpin_entity)
+    pub operation: String,
+    /// Operation-specific parameters (validated at runtime)
+    #[serde(flatten)]
+    pub params: serde_json::Map<String, serde_json::Value>,
+}
+
 /// Query response with multiple results.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct QueryResponse {

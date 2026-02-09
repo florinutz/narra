@@ -6,7 +6,7 @@ mod mutate_knowledge;
 mod mutate_notes;
 mod mutate_ops;
 
-use crate::mcp::{ImpactSummary, MutationRequest, MutationResponse, NarraServer};
+use crate::mcp::{ImpactSummary, MutationInput, MutationRequest, MutationResponse, NarraServer};
 use crate::services::{ConsistencySeverity, ImpactAnalysis, ValidationResult};
 use rmcp::handler::server::wrapper::Parameters;
 
@@ -14,8 +14,17 @@ impl NarraServer {
     /// Handler for mutate tool - implementation called from server.rs
     pub async fn handle_mutate(
         &self,
-        Parameters(request): Parameters<MutationRequest>,
+        Parameters(input): Parameters<MutationInput>,
     ) -> Result<MutationResponse, String> {
+        // Reconstruct the full request object for deserialization
+        let mut full_request = serde_json::Map::new();
+        full_request.insert("operation".to_string(), serde_json::json!(input.operation));
+        full_request.extend(input.params);
+
+        // Deserialize to MutationRequest
+        let request: MutationRequest = serde_json::from_value(serde_json::Value::Object(full_request))
+            .map_err(|e| format!("Invalid mutation parameters: {}", e))?;
+
         match request {
             MutationRequest::CreateCharacter {
                 id,

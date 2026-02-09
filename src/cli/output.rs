@@ -123,3 +123,16 @@ pub fn print_separator(width: usize) {
 pub fn print_hint(msg: &str) {
     println!("{}", msg.dimmed());
 }
+
+/// Create a steady-tick spinner with a cyan spinner and custom message.
+pub fn create_spinner(msg: &str) -> indicatif::ProgressBar {
+    let pb = indicatif::ProgressBar::new_spinner();
+    pb.set_style(
+        indicatif::ProgressStyle::with_template("{spinner:.cyan} {msg}")
+            .unwrap()
+            .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"),
+    );
+    pb.set_message(msg.to_string());
+    pb.enable_steady_tick(std::time::Duration::from_millis(100));
+    pb
+}

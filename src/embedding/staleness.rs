@@ -357,26 +357,36 @@ async fn regenerate_embedding_internal(
             character_composite(&character, &relationships, &perceptions)
         }
         "location" => {
-            let mut locations: Vec<Location> = db
-                .select(entity_id)
+            let mut result = db
+                .query("SELECT * FROM ONLY $ref")
+                .bind(("ref", entity_ref.clone()))
                 .await
                 .map_err(|e| NarraError::Database(format!("Failed to fetch location: {}", e)))?;
 
-            let location = locations.pop().ok_or_else(|| {
+            let location: Option<Location> = result
+                .take(0)
+                .map_err(|e| NarraError::Database(format!("Failed to parse location: {}", e)))?;
+
+            let location = location.ok_or_else(|| {
                 NarraError::Database(format!("Location not found: {}", entity_id))
             })?;
 
             location_composite(&location)
         }
         "event" => {
-            let mut events: Vec<Event> = db
-                .select(entity_id)
+            let mut result = db
+                .query("SELECT * FROM ONLY $ref")
+                .bind(("ref", entity_ref.clone()))
                 .await
                 .map_err(|e| NarraError::Database(format!("Failed to fetch event: {}", e)))?;
 
-            let event = events
-                .pop()
-                .ok_or_else(|| NarraError::Database(format!("Event not found: {}", entity_id)))?;
+            let event: Option<Event> = result
+                .take(0)
+                .map_err(|e| NarraError::Database(format!("Failed to parse event: {}", e)))?;
+
+            let event = event.ok_or_else(|| {
+                NarraError::Database(format!("Event not found: {}", entity_id))
+            })?;
 
             event_composite(&event)
         }

@@ -8,7 +8,7 @@ mod query_search;
 mod query_validation;
 
 use crate::mcp::NarraServer;
-use crate::mcp::{EntityResult, QueryRequest, QueryResponse, MAX_DEPTH, MAX_LIMIT};
+use crate::mcp::{EntityResult, QueryInput, QueryRequest, QueryResponse, MAX_DEPTH, MAX_LIMIT};
 use crate::services::{FilterOp, MetadataFilter};
 use base64::{engine::general_purpose, Engine as _};
 use rmcp::handler::server::wrapper::Parameters;
@@ -75,8 +75,17 @@ impl NarraServer {
     /// Handler for query tool - implementation called from server.rs
     pub async fn handle_query(
         &self,
-        Parameters(request): Parameters<QueryRequest>,
+        Parameters(input): Parameters<QueryInput>,
     ) -> Result<QueryResponse, String> {
+        // Reconstruct the full request object for deserialization
+        let mut full_request = serde_json::Map::new();
+        full_request.insert("operation".to_string(), serde_json::json!(input.operation));
+        full_request.extend(input.params);
+
+        // Deserialize to QueryRequest
+        let request: QueryRequest = serde_json::from_value(serde_json::Value::Object(full_request))
+            .map_err(|e| format!("Invalid query parameters: {}", e))?;
+
         match request {
             QueryRequest::Lookup {
                 entity_id,
