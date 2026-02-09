@@ -384,9 +384,8 @@ async fn regenerate_embedding_internal(
                 .take(0)
                 .map_err(|e| NarraError::Database(format!("Failed to parse event: {}", e)))?;
 
-            let event = event.ok_or_else(|| {
-                NarraError::Database(format!("Event not found: {}", entity_id))
-            })?;
+            let event = event
+                .ok_or_else(|| NarraError::Database(format!("Event not found: {}", entity_id)))?;
 
             event_composite(&event)
         }

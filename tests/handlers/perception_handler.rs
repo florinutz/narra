@@ -8,8 +8,8 @@ use narra::models::perception::{create_perception, PerceptionCreate};
 use narra::repository::{EntityRepository, SurrealEntityRepository};
 use rmcp::handler::server::wrapper::Parameters;
 
-use crate::common::builders::CharacterBuilder;
 use crate::common::harness::TestHarness;
+use crate::common::{builders::CharacterBuilder, to_query_input};
 
 /// Helper to create a character pair with perceptions.
 async fn setup_perception_pair(harness: &TestHarness) -> (String, String) {
@@ -83,7 +83,9 @@ async fn test_perception_gap_needs_embeddings() {
         target_id: bob_id.clone(),
     };
 
-    let response = server.handle_query(Parameters(request)).await;
+    let response = server
+        .handle_query(Parameters(to_query_input(request)))
+        .await;
 
     // With NoopEmbedding, no perspective embeddings exist, so we get an error
     assert!(
@@ -120,7 +122,9 @@ async fn test_perception_gap_no_perception() {
         target_id: format!("character:{}", bob.id.key()),
     };
 
-    let response = server.handle_query(Parameters(request)).await;
+    let response = server
+        .handle_query(Parameters(to_query_input(request)))
+        .await;
 
     // Should error with no perception
     assert!(
@@ -175,7 +179,9 @@ async fn test_perception_matrix_needs_perspectives() {
         limit: Some(20),
     };
 
-    let response = server.handle_query(Parameters(request)).await;
+    let response = server
+        .handle_query(Parameters(to_query_input(request)))
+        .await;
 
     // Without perspective embeddings, this errors
     assert!(
@@ -202,7 +208,9 @@ async fn test_perception_matrix_no_observers() {
         limit: Some(20),
     };
 
-    let response = server.handle_query(Parameters(request)).await;
+    let response = server
+        .handle_query(Parameters(to_query_input(request)))
+        .await;
 
     // No observers = error about missing perspectives
     assert!(response.is_err(), "Should error with no observers");
@@ -225,7 +233,9 @@ async fn test_perception_shift_needs_snapshots() {
         target_id: bob_id,
     };
 
-    let response = server.handle_query(Parameters(request)).await;
+    let response = server
+        .handle_query(Parameters(to_query_input(request)))
+        .await;
 
     // Without perspective snapshots, should error
     assert!(

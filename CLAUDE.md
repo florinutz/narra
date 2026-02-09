@@ -44,7 +44,7 @@ MCP Server (rmcp)    ──┘
 - **`services/`** — Business logic: search (keyword/semantic/hybrid), consistency checking, impact analysis, graph analytics, influence propagation, irony detection, clustering (linfa), context/summary with moka caching
 - **`embedding/`** — `EmbeddingService` trait with `LocalEmbeddingService` (fastembed BGE-small-en-v1.5, 384 dims) and `NoopEmbeddingService` for tests. `StalenessManager` tracks embedding freshness. `BackfillService` for batch embedding generation
 - **`mcp/`** — MCP server using `rmcp` crate. 5 consolidated tools (query, mutate, session, export_world, generate_graph). Tool definitions are in `server.rs` via `#[tool]` macros; implementations in `tools/*.rs`. Also has resources and prompts
-- **`mcp/types.rs`** — Request/response enums using `#[serde(tag = "operation")]` discriminated unions. `QueryRequest` has ~35 variants, `MutationRequest` has ~20 variants
+- **`mcp/types.rs`** — Request/response enums using `#[serde(tag = "operation")]` discriminated unions. `QueryRequest` has 40 variants, `MutationRequest` has 25 variants
 - **`cli/`** — Clap-derive command tree (`Commands` enum with subcommands). Handlers in `cli/handlers/` dispatch to services
 - **`session/`** — Session state persistence (hot entities, pinned entities, pending decisions) via JSON file
 - **`db/`** — SurrealDB connection (`RocksDb` engine, namespace `narra`, database `world`) and schema migrations (`.surql` files applied in order)
@@ -61,6 +61,45 @@ The MCP server consolidates operations into 5 tools. Each tool receives a tagged
 pub enum QueryRequest { Lookup { ... }, Search { ... }, ... }
 ```
 Tool handler implementations are split across `mcp/tools/*.rs` files (query.rs, mutate.rs, validate.rs, etc.) but the `#[tool]` macro declarations must remain in the `#[tool_router] impl NarraServer` block in `server.rs`.
+
+## CLI Command Structure
+
+Modern unified interface (no legacy commands):
+
+**High-level workflows:**
+- `narra explore <entity>` — Deep entity exploration
+- `narra ask <question>` — Natural language queries
+- `narra find [query]` — Hybrid search with subcommands: `join`, `knowledge`, `graph`, `perspectives`, `similar`
+- `narra path <from> <to>` — Connection paths
+- `narra references <entity>` — What references an entity
+
+**Entity management:**
+- `narra create <type>` — Create: character, location, event, scene, knowledge, relationship, perception, fact, note
+- `narra get <entity>` — Retrieve by ID or name
+- `narra list <type>` — List with filters
+- `narra update <entity>` — Update fields, link/unlink
+- `narra delete <entity>` — Delete (respects protection)
+- `narra protect/unprotect <entity>` — Entity protection
+
+**Analysis:**
+- `narra analyze <operation>` — 20+ operations: centrality, influence, irony, asymmetries, conflicts, tensions, arc-drift, arc-history, arc-compare, arc-moment, perception-gap, perception-matrix, perception-shift, themes, thematic-gaps, temporal, contradictions, what-if, impact, situation-report, dossier, scene-prep
+
+**World management:**
+- `narra world status/health` — Overview and diagnostics
+- `narra world backfill/baseline-arcs` — Embeddings and arc tracking setup
+- `narra world import/export` — YAML round-trip
+- `narra world validate` — Consistency checking
+- `narra world graph` — Mermaid diagram generation
+
+**Session:**
+- `narra session context` — View session state
+- `narra session pin/unpin <entity>` — Persistent context management
+
+**Global flags:**
+- `--json` — JSON output
+- `--md` — Markdown output
+- `--brief/--full` — Detail control
+- `--no-semantic` — Disable semantic search
 
 ## Testing
 

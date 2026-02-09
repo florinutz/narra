@@ -15,8 +15,11 @@ use narra::repository::{
 use pretty_assertions::assert_eq;
 use rmcp::handler::server::wrapper::Parameters;
 
-use crate::common::builders::{CharacterBuilder, EventBuilder, LocationBuilder};
-use crate::common::harness::TestHarness;
+use crate::common::{
+    builders::{CharacterBuilder, EventBuilder, LocationBuilder},
+    harness::TestHarness,
+    to_mutation_input, to_query_input,
+};
 
 // =============================================================================
 // RECORD KNOWLEDGE - BASIC OPERATIONS
@@ -58,7 +61,9 @@ async fn test_record_knowledge_success() {
         source_character_id: None,
         event_id: None,
     };
-    let response = server.handle_mutate(Parameters(request)).await;
+    let response = server
+        .handle_mutate(Parameters(to_mutation_input(request)))
+        .await;
 
     assert!(
         response.is_ok(),
@@ -113,7 +118,9 @@ async fn test_record_knowledge_with_source_character() {
         source_character_id: Some(bob.id.key().to_string()),
         event_id: Some(event.id.key().to_string()),
     };
-    let response = server.handle_mutate(Parameters(request)).await;
+    let response = server
+        .handle_mutate(Parameters(to_mutation_input(request)))
+        .await;
 
     assert!(
         response.is_ok(),
@@ -170,7 +177,9 @@ async fn test_record_knowledge_with_event() {
         source_character_id: None,
         event_id: Some(event.id.key().to_string()),
     };
-    let response = server.handle_mutate(Parameters(request)).await;
+    let response = server
+        .handle_mutate(Parameters(to_mutation_input(request)))
+        .await;
 
     assert!(
         response.is_ok(),
@@ -215,7 +224,9 @@ async fn test_record_knowledge_certainty_knows() {
         source_character_id: None,
         event_id: None,
     };
-    let response = server.handle_mutate(Parameters(request)).await;
+    let response = server
+        .handle_mutate(Parameters(to_mutation_input(request)))
+        .await;
     assert!(response.is_ok());
 
     // Verify certainty level
@@ -250,7 +261,9 @@ async fn test_record_knowledge_certainty_suspects() {
         source_character_id: None,
         event_id: None,
     };
-    let response = server.handle_mutate(Parameters(request)).await;
+    let response = server
+        .handle_mutate(Parameters(to_mutation_input(request)))
+        .await;
     assert!(response.is_ok());
 
     let knowledge_repo = SurrealKnowledgeRepository::new(harness.db.clone());
@@ -286,7 +299,9 @@ async fn test_record_knowledge_certainty_believes_wrongly() {
         source_character_id: None,
         event_id: None,
     };
-    let response = server.handle_mutate(Parameters(request)).await;
+    let response = server
+        .handle_mutate(Parameters(to_mutation_input(request)))
+        .await;
     assert!(
         response.is_ok(),
         "BelievesWrongly should succeed: {:?}",
@@ -328,7 +343,9 @@ async fn test_record_knowledge_certainty_unknown() {
         source_character_id: None,
         event_id: None,
     };
-    let response = server.handle_mutate(Parameters(request)).await;
+    let response = server
+        .handle_mutate(Parameters(to_mutation_input(request)))
+        .await;
     assert!(response.is_ok());
 
     let knowledge_repo = SurrealKnowledgeRepository::new(harness.db.clone());
@@ -378,7 +395,9 @@ async fn test_record_knowledge_method_told() {
         source_character_id: Some(bob.id.key().to_string()),
         event_id: Some(event.id.key().to_string()),
     };
-    let response = server.handle_mutate(Parameters(request)).await;
+    let response = server
+        .handle_mutate(Parameters(to_mutation_input(request)))
+        .await;
     assert!(response.is_ok());
 
     let knowledge_repo = SurrealKnowledgeRepository::new(harness.db.clone());
@@ -416,7 +435,9 @@ async fn test_record_knowledge_method_witnessed() {
         source_character_id: None,
         event_id: Some(event.id.key().to_string()),
     };
-    let response = server.handle_mutate(Parameters(request)).await;
+    let response = server
+        .handle_mutate(Parameters(to_mutation_input(request)))
+        .await;
     assert!(response.is_ok());
 
     let knowledge_repo = SurrealKnowledgeRepository::new(harness.db.clone());
@@ -454,7 +475,9 @@ async fn test_record_knowledge_method_deduced() {
         source_character_id: None,
         event_id: Some(event.id.key().to_string()),
     };
-    let response = server.handle_mutate(Parameters(request)).await;
+    let response = server
+        .handle_mutate(Parameters(to_mutation_input(request)))
+        .await;
     assert!(response.is_ok());
 
     let knowledge_repo = SurrealKnowledgeRepository::new(harness.db.clone());
@@ -495,7 +518,7 @@ async fn test_temporal_current_knowledge() {
         event_id: None,
     };
     server
-        .handle_mutate(Parameters(request))
+        .handle_mutate(Parameters(to_mutation_input(request)))
         .await
         .expect("Record failed");
 
@@ -509,7 +532,7 @@ async fn test_temporal_current_knowledge() {
         event_id: None,
     };
     server
-        .handle_mutate(Parameters(request2))
+        .handle_mutate(Parameters(to_mutation_input(request2)))
         .await
         .expect("Record failed");
 
@@ -519,7 +542,7 @@ async fn test_temporal_current_knowledge() {
         event_id: None,
         event_name: None,
     };
-    let response = server.handle_query(Parameters(query)).await;
+    let response = server.handle_query(Parameters(to_query_input(query))).await;
 
     assert!(
         response.is_ok(),
@@ -572,7 +595,7 @@ async fn test_temporal_at_event() {
         event_id: Some(event1.id.key().to_string()),
     };
     server
-        .handle_mutate(Parameters(request1))
+        .handle_mutate(Parameters(to_mutation_input(request1)))
         .await
         .expect("Record 1 failed");
 
@@ -587,7 +610,7 @@ async fn test_temporal_at_event() {
         event_id: Some(event2.id.key().to_string()),
     };
     server
-        .handle_mutate(Parameters(request2))
+        .handle_mutate(Parameters(to_mutation_input(request2)))
         .await
         .expect("Record 2 failed");
 
@@ -597,7 +620,7 @@ async fn test_temporal_at_event() {
         event_id: Some(event1.id.to_string()),
         event_name: None,
     };
-    let response = server.handle_query(Parameters(query)).await;
+    let response = server.handle_query(Parameters(to_query_input(query))).await;
 
     assert!(
         response.is_ok(),
@@ -647,7 +670,7 @@ async fn test_temporal_by_event_name() {
         event_id: Some(event.id.key().to_string()),
     };
     server
-        .handle_mutate(Parameters(request))
+        .handle_mutate(Parameters(to_mutation_input(request)))
         .await
         .expect("Record failed");
 
@@ -657,7 +680,7 @@ async fn test_temporal_by_event_name() {
         event_id: None,
         event_name: Some("Great Revelation".to_string()), // Partial match
     };
-    let response = server.handle_query(Parameters(query)).await;
+    let response = server.handle_query(Parameters(to_query_input(query))).await;
 
     assert!(
         response.is_ok(),
@@ -692,7 +715,9 @@ async fn test_record_knowledge_invalid_character() {
         source_character_id: None,
         event_id: None,
     };
-    let response = server.handle_mutate(Parameters(request)).await;
+    let response = server
+        .handle_mutate(Parameters(to_mutation_input(request)))
+        .await;
 
     assert!(response.is_err(), "Should fail with invalid character_id");
     let error_message = response.unwrap_err();
@@ -711,7 +736,7 @@ async fn test_temporal_nonexistent_character() {
         event_id: None,
         event_name: None,
     };
-    let response = server.handle_query(Parameters(query)).await;
+    let response = server.handle_query(Parameters(to_query_input(query))).await;
 
     // The temporal query should succeed but return empty results
     // (querying knowledge for a character that exists but has no knowledge)

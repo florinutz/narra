@@ -11,7 +11,7 @@ mod common;
 
 use std::sync::Arc;
 
-use common::harness::TestHarness;
+use common::{harness::TestHarness, to_query_input};
 use narra::embedding::NoopEmbeddingService;
 use narra::mcp::{NarraServer, QueryRequest};
 use narra::models::character::{create_character, CharacterCreate};
@@ -160,7 +160,7 @@ async fn test_situation_report_mcp() {
 
     let request = QueryRequest::SituationReport;
     let response = server
-        .handle_query(Parameters(request))
+        .handle_query(Parameters(to_query_input(request)))
         .await
         .expect("MCP situation_report should succeed");
 
@@ -288,7 +288,7 @@ async fn test_character_dossier_mcp() {
         character_id: alice.id.to_string(),
     };
     let response = server
-        .handle_query(Parameters(request))
+        .handle_query(Parameters(to_query_input(request)))
         .await
         .expect("MCP character_dossier should succeed");
 
@@ -403,7 +403,9 @@ async fn test_scene_planning_mcp_validation() {
     let request = QueryRequest::ScenePlanning {
         character_ids: vec!["alice".to_string()],
     };
-    let result = server.handle_query(Parameters(request)).await;
+    let result = server
+        .handle_query(Parameters(to_query_input(request)))
+        .await;
     assert!(result.is_err(), "Should reject < 2 characters");
 }
 
@@ -437,7 +439,7 @@ async fn test_scene_planning_mcp() {
         character_ids: vec!["character:alice".to_string(), "character:bob".to_string()],
     };
     let response = server
-        .handle_query(Parameters(request))
+        .handle_query(Parameters(to_query_input(request)))
         .await
         .expect("Scene planning should succeed");
 

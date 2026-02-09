@@ -12,7 +12,7 @@ mod common;
 
 use std::sync::Arc;
 
-use common::harness::TestHarness;
+use common::{harness::TestHarness, to_mutation_input, to_query_input};
 use narra::embedding::{EmbeddingConfig, LocalEmbeddingService, NoopEmbeddingService};
 use narra::mcp::{MutationRequest, NarraServer, QueryRequest};
 use narra::models::character::{create_character, CharacterCreate};
@@ -77,7 +77,7 @@ async fn test_unresolved_tensions_empty_world() {
         max_shared_scenes: None,
     };
     let response = server
-        .handle_query(Parameters(request))
+        .handle_query(Parameters(to_query_input(request)))
         .await
         .expect("Should succeed with empty results");
 
@@ -183,7 +183,7 @@ async fn test_unresolved_tensions_finds_asymmetric_pairs() {
         max_shared_scenes: None,
     };
     let response = server
-        .handle_query(Parameters(request))
+        .handle_query(Parameters(to_query_input(request)))
         .await
         .expect("UnresolvedTensions should succeed");
 
@@ -290,7 +290,7 @@ async fn test_unresolved_tensions_min_asymmetry_filter() {
         max_shared_scenes: None,
     };
     let response = server
-        .handle_query(Parameters(request))
+        .handle_query(Parameters(to_query_input(request)))
         .await
         .expect("Should succeed");
 
@@ -362,7 +362,7 @@ async fn test_unresolved_tensions_one_way_only() {
         max_shared_scenes: None,
     };
     let response = server
-        .handle_query(Parameters(request))
+        .handle_query(Parameters(to_query_input(request)))
         .await
         .expect("Should succeed");
 
@@ -536,7 +536,7 @@ async fn test_unresolved_tensions_max_shared_scenes() {
         max_shared_scenes: Some(2),
     };
     let response = server
-        .handle_query(Parameters(request))
+        .handle_query(Parameters(to_query_input(request)))
         .await
         .expect("Should succeed");
 
@@ -553,7 +553,7 @@ async fn test_unresolved_tensions_max_shared_scenes() {
         max_shared_scenes: Some(5),
     };
     let response = server
-        .handle_query(Parameters(request))
+        .handle_query(Parameters(to_query_input(request)))
         .await
         .expect("Should succeed");
 
@@ -637,7 +637,7 @@ async fn test_unresolved_tensions_limit() {
         max_shared_scenes: None,
     };
     let response = server
-        .handle_query(Parameters(request))
+        .handle_query(Parameters(to_query_input(request)))
         .await
         .expect("Should succeed");
 
@@ -680,7 +680,9 @@ async fn test_thematic_gaps_insufficient_entities() {
         min_cluster_size: None,
         expected_types: None,
     };
-    let result = server.handle_query(Parameters(request)).await;
+    let result = server
+        .handle_query(Parameters(to_query_input(request)))
+        .await;
 
     assert!(
         result.is_err(),
@@ -730,7 +732,7 @@ async fn test_thematic_gaps_finds_gaps() {
         expected_types: Some(vec!["character".to_string(), "event".to_string()]),
     };
     let response = server
-        .handle_query(Parameters(request))
+        .handle_query(Parameters(to_query_input(request)))
         .await
         .expect("ThematicGaps should succeed");
 
@@ -797,7 +799,7 @@ async fn test_thematic_gaps_no_gaps_when_types_present() {
         expected_types: Some(vec!["character".to_string()]),
     };
     let response = server
-        .handle_query(Parameters(request))
+        .handle_query(Parameters(to_query_input(request)))
         .await
         .expect("Should succeed");
 
@@ -844,7 +846,7 @@ async fn test_thematic_gaps_min_cluster_size() {
         expected_types: Some(vec!["character".to_string(), "event".to_string()]),
     };
     let response = server
-        .handle_query(Parameters(request))
+        .handle_query(Parameters(to_query_input(request)))
         .await
         .expect("Should succeed");
 
@@ -871,7 +873,9 @@ async fn test_what_if_no_embedding_service() {
         certainty: None,
         source_character: None,
     };
-    let result = server.handle_query(Parameters(request)).await;
+    let result = server
+        .handle_query(Parameters(to_query_input(request)))
+        .await;
 
     assert!(
         result.is_err(),
@@ -897,7 +901,9 @@ async fn test_what_if_nonexistent_character() {
         certainty: None,
         source_character: None,
     };
-    let result = server.handle_query(Parameters(request)).await;
+    let result = server
+        .handle_query(Parameters(to_query_input(request)))
+        .await;
 
     assert!(result.is_err(), "Should error for nonexistent character");
     assert!(
@@ -932,7 +938,9 @@ async fn test_what_if_nonexistent_fact() {
         certainty: None,
         source_character: None,
     };
-    let result = server.handle_query(Parameters(request)).await;
+    let result = server
+        .handle_query(Parameters(to_query_input(request)))
+        .await;
 
     assert!(result.is_err(), "Should error for nonexistent fact");
     assert!(
@@ -964,15 +972,17 @@ async fn test_what_if_no_character_embedding() {
 
     // Create knowledge fact via proper mutation
     server
-        .handle_mutate(Parameters(MutationRequest::RecordKnowledge {
-            character_id: alice.id.to_string(),
-            target_id: "treasure_secret".to_string(),
-            fact: "The treasure is hidden under the mountain".to_string(),
-            certainty: "knows".to_string(),
-            method: Some("initial".to_string()),
-            source_character_id: None,
-            event_id: None,
-        }))
+        .handle_mutate(Parameters(to_mutation_input(
+            MutationRequest::RecordKnowledge {
+                character_id: alice.id.to_string(),
+                target_id: "treasure_secret".to_string(),
+                fact: "The treasure is hidden under the mountain".to_string(),
+                certainty: "knows".to_string(),
+                method: Some("initial".to_string()),
+                source_character_id: None,
+                event_id: None,
+            },
+        )))
         .await
         .expect("RecordKnowledge should succeed");
 
@@ -996,7 +1006,9 @@ async fn test_what_if_no_character_embedding() {
         certainty: None,
         source_character: None,
     };
-    let result = server.handle_query(Parameters(request)).await;
+    let result = server
+        .handle_query(Parameters(to_query_input(request)))
+        .await;
 
     assert!(
         result.is_err(),
@@ -1052,7 +1064,7 @@ async fn test_what_if_full_workflow() {
         entity_type: Some("character".into()),
     };
     server
-        .handle_mutate(Parameters(backfill_request))
+        .handle_mutate(Parameters(to_mutation_input(backfill_request)))
         .await
         .expect("Backfill should succeed");
 
@@ -1067,7 +1079,7 @@ async fn test_what_if_full_workflow() {
         event_id: None,
     };
     server
-        .handle_mutate(Parameters(record_request))
+        .handle_mutate(Parameters(to_mutation_input(record_request)))
         .await
         .expect("RecordKnowledge should succeed");
 
@@ -1076,7 +1088,7 @@ async fn test_what_if_full_workflow() {
         entity_type: Some("knowledge".into()),
     };
     server
-        .handle_mutate(Parameters(backfill_request))
+        .handle_mutate(Parameters(to_mutation_input(backfill_request)))
         .await
         .expect("Knowledge backfill should succeed");
 
@@ -1133,7 +1145,7 @@ async fn test_what_if_full_workflow() {
         source_character: None,
     };
     let response = server
-        .handle_query(Parameters(request))
+        .handle_query(Parameters(to_query_input(request)))
         .await
         .expect("WhatIf should succeed");
 
@@ -1228,7 +1240,7 @@ async fn test_what_if_id_normalization() {
         entity_type: Some("character".into()),
     };
     server
-        .handle_mutate(Parameters(backfill_request))
+        .handle_mutate(Parameters(to_mutation_input(backfill_request)))
         .await
         .unwrap();
 
@@ -1243,15 +1255,17 @@ async fn test_what_if_id_normalization() {
         event_id: None,
     };
     server
-        .handle_mutate(Parameters(record_request))
+        .handle_mutate(Parameters(to_mutation_input(record_request)))
         .await
         .unwrap();
 
     // Backfill knowledge
     server
-        .handle_mutate(Parameters(MutationRequest::BackfillEmbeddings {
-            entity_type: Some("knowledge".into()),
-        }))
+        .handle_mutate(Parameters(to_mutation_input(
+            MutationRequest::BackfillEmbeddings {
+                entity_type: Some("knowledge".into()),
+            },
+        )))
         .await
         .unwrap();
 
@@ -1275,7 +1289,9 @@ async fn test_what_if_id_normalization() {
         certainty: None,
         source_character: None,
     };
-    let response = server.handle_query(Parameters(request)).await;
+    let response = server
+        .handle_query(Parameters(to_query_input(request)))
+        .await;
     assert!(
         response.is_ok(),
         "Should handle bare keys: {:?}",
@@ -1289,7 +1305,9 @@ async fn test_what_if_id_normalization() {
         certainty: None,
         source_character: None,
     };
-    let response = server.handle_query(Parameters(request)).await;
+    let response = server
+        .handle_query(Parameters(to_query_input(request)))
+        .await;
     assert!(
         response.is_ok(),
         "Should handle full IDs: {:?}",
@@ -1319,46 +1337,54 @@ async fn test_what_if_conflict_detection() {
 
     // Backfill character embedding
     server
-        .handle_mutate(Parameters(MutationRequest::BackfillEmbeddings {
-            entity_type: Some("character".into()),
-        }))
+        .handle_mutate(Parameters(to_mutation_input(
+            MutationRequest::BackfillEmbeddings {
+                entity_type: Some("character".into()),
+            },
+        )))
         .await
         .unwrap();
 
     // Record contradictory knowledge
     // Alice believes "Bob is innocent"
     server
-        .handle_mutate(Parameters(MutationRequest::RecordKnowledge {
-            character_id: alice.id.to_string(),
-            target_id: "bob_innocence".to_string(),
-            fact: "Bob is completely innocent and trustworthy".to_string(),
-            certainty: "knows".to_string(),
-            method: Some("initial".to_string()),
-            source_character_id: None,
-            event_id: None,
-        }))
+        .handle_mutate(Parameters(to_mutation_input(
+            MutationRequest::RecordKnowledge {
+                character_id: alice.id.to_string(),
+                target_id: "bob_innocence".to_string(),
+                fact: "Bob is completely innocent and trustworthy".to_string(),
+                certainty: "knows".to_string(),
+                method: Some("initial".to_string()),
+                source_character_id: None,
+                event_id: None,
+            },
+        )))
         .await
         .unwrap();
 
     // Now create a fact that says "Bob is guilty"
     server
-        .handle_mutate(Parameters(MutationRequest::RecordKnowledge {
-            character_id: alice.id.to_string(), // owned by alice but we'll treat as a fact
-            target_id: "bob_guilt".to_string(),
-            fact: "Bob is guilty of the crime and cannot be trusted".to_string(),
-            certainty: "knows".to_string(),
-            method: Some("initial".to_string()),
-            source_character_id: None,
-            event_id: None,
-        }))
+        .handle_mutate(Parameters(to_mutation_input(
+            MutationRequest::RecordKnowledge {
+                character_id: alice.id.to_string(), // owned by alice but we'll treat as a fact
+                target_id: "bob_guilt".to_string(),
+                fact: "Bob is guilty of the crime and cannot be trusted".to_string(),
+                certainty: "knows".to_string(),
+                method: Some("initial".to_string()),
+                source_character_id: None,
+                event_id: None,
+            },
+        )))
         .await
         .unwrap();
 
     // Backfill knowledge embeddings
     server
-        .handle_mutate(Parameters(MutationRequest::BackfillEmbeddings {
-            entity_type: Some("knowledge".into()),
-        }))
+        .handle_mutate(Parameters(to_mutation_input(
+            MutationRequest::BackfillEmbeddings {
+                entity_type: Some("knowledge".into()),
+            },
+        )))
         .await
         .unwrap();
 
@@ -1386,7 +1412,7 @@ async fn test_what_if_conflict_detection() {
         source_character: None,
     };
     let response = server
-        .handle_query(Parameters(request))
+        .handle_query(Parameters(to_query_input(request)))
         .await
         .expect("WhatIf should succeed");
 
@@ -1436,7 +1462,7 @@ async fn test_response_format_unresolved_tensions() {
         max_shared_scenes: None,
     };
     let response = server
-        .handle_query(Parameters(request))
+        .handle_query(Parameters(to_query_input(request)))
         .await
         .expect("Should return valid response");
 
@@ -1456,7 +1482,9 @@ async fn test_response_format_thematic_gaps_propagates_clustering_error() {
         min_cluster_size: None,
         expected_types: None,
     };
-    let result = server.handle_query(Parameters(request)).await;
+    let result = server
+        .handle_query(Parameters(to_query_input(request)))
+        .await;
 
     // Should propagate the clustering error (insufficient entities)
     assert!(result.is_err(), "Should propagate clustering error");
@@ -1485,15 +1513,17 @@ async fn test_knowledge_conflicts_empty_when_no_conflicts() {
 
     // Record normal knowledge (certainty = "knows", not "believes_wrongly")
     server
-        .handle_mutate(Parameters(MutationRequest::RecordKnowledge {
-            character_id: alice.id.to_string(),
-            target_id: "fact1".to_string(),
-            fact: "The sun rises in the east".to_string(),
-            certainty: "knows".to_string(),
-            method: Some("initial".to_string()),
-            source_character_id: None,
-            event_id: None,
-        }))
+        .handle_mutate(Parameters(to_mutation_input(
+            MutationRequest::RecordKnowledge {
+                character_id: alice.id.to_string(),
+                target_id: "fact1".to_string(),
+                fact: "The sun rises in the east".to_string(),
+                certainty: "knows".to_string(),
+                method: Some("initial".to_string()),
+                source_character_id: None,
+                event_id: None,
+            },
+        )))
         .await
         .expect("RecordKnowledge should succeed");
 
@@ -1502,7 +1532,7 @@ async fn test_knowledge_conflicts_empty_when_no_conflicts() {
         limit: None,
     };
     let response = server
-        .handle_query(Parameters(request))
+        .handle_query(Parameters(to_query_input(request)))
         .await
         .expect("KnowledgeConflicts should succeed");
 
@@ -1536,15 +1566,17 @@ async fn test_knowledge_conflicts_finds_believes_wrongly() {
 
     // Record BelievesWrongly knowledge with truth_value
     server
-        .handle_mutate(Parameters(MutationRequest::RecordKnowledge {
-            character_id: alice.id.to_string(),
-            target_id: "secret_identity".to_string(),
-            fact: "Bob is a simple merchant".to_string(),
-            certainty: "believes_wrongly".to_string(),
-            method: Some("initial".to_string()),
-            source_character_id: None,
-            event_id: None,
-        }))
+        .handle_mutate(Parameters(to_mutation_input(
+            MutationRequest::RecordKnowledge {
+                character_id: alice.id.to_string(),
+                target_id: "secret_identity".to_string(),
+                fact: "Bob is a simple merchant".to_string(),
+                certainty: "believes_wrongly".to_string(),
+                method: Some("initial".to_string()),
+                source_character_id: None,
+                event_id: None,
+            },
+        )))
         .await
         .expect("RecordKnowledge should succeed");
 
@@ -1560,7 +1592,7 @@ async fn test_knowledge_conflicts_finds_believes_wrongly() {
         limit: None,
     };
     let response = server
-        .handle_query(Parameters(request))
+        .handle_query(Parameters(to_query_input(request)))
         .await
         .expect("KnowledgeConflicts should succeed");
 
@@ -1613,15 +1645,17 @@ async fn test_knowledge_conflicts_filters_by_character() {
     // Both have BelievesWrongly states
     for char in [&alice, &bob] {
         server
-            .handle_mutate(Parameters(MutationRequest::RecordKnowledge {
-                character_id: char.id.to_string(),
-                target_id: format!("secret_{}", char.id.key()),
-                fact: "Wrong belief".to_string(),
-                certainty: "believes_wrongly".to_string(),
-                method: Some("initial".to_string()),
-                source_character_id: None,
-                event_id: None,
-            }))
+            .handle_mutate(Parameters(to_mutation_input(
+                MutationRequest::RecordKnowledge {
+                    character_id: char.id.to_string(),
+                    target_id: format!("secret_{}", char.id.key()),
+                    fact: "Wrong belief".to_string(),
+                    certainty: "believes_wrongly".to_string(),
+                    method: Some("initial".to_string()),
+                    source_character_id: None,
+                    event_id: None,
+                },
+            )))
             .await
             .expect("RecordKnowledge should succeed");
     }
@@ -1633,7 +1667,7 @@ async fn test_knowledge_conflicts_filters_by_character() {
         limit: None,
     };
     let response = server
-        .handle_query(Parameters(request))
+        .handle_query(Parameters(to_query_input(request)))
         .await
         .expect("KnowledgeConflicts should succeed");
 
@@ -1666,15 +1700,17 @@ async fn test_knowledge_conflicts_respects_limit() {
     // Create multiple BelievesWrongly states
     for i in 0..5 {
         server
-            .handle_mutate(Parameters(MutationRequest::RecordKnowledge {
-                character_id: alice.id.to_string(),
-                target_id: format!("wrong_belief_{}", i),
-                fact: format!("Wrong belief number {}", i),
-                certainty: "believes_wrongly".to_string(),
-                method: Some("initial".to_string()),
-                source_character_id: None,
-                event_id: None,
-            }))
+            .handle_mutate(Parameters(to_mutation_input(
+                MutationRequest::RecordKnowledge {
+                    character_id: alice.id.to_string(),
+                    target_id: format!("wrong_belief_{}", i),
+                    fact: format!("Wrong belief number {}", i),
+                    certainty: "believes_wrongly".to_string(),
+                    method: Some("initial".to_string()),
+                    source_character_id: None,
+                    event_id: None,
+                },
+            )))
             .await
             .expect("RecordKnowledge should succeed");
     }
@@ -1685,7 +1721,7 @@ async fn test_knowledge_conflicts_respects_limit() {
         limit: Some(2),
     };
     let response = server
-        .handle_query(Parameters(request))
+        .handle_query(Parameters(to_query_input(request)))
         .await
         .expect("KnowledgeConflicts should succeed");
 

@@ -22,8 +22,9 @@ impl NarraServer {
         full_request.extend(input.params);
 
         // Deserialize to MutationRequest
-        let request: MutationRequest = serde_json::from_value(serde_json::Value::Object(full_request))
-            .map_err(|e| format!("Invalid mutation parameters: {}", e))?;
+        let request: MutationRequest =
+            serde_json::from_value(serde_json::Value::Object(full_request))
+                .map_err(|e| format!("Invalid mutation parameters: {}", e))?;
 
         match request {
             MutationRequest::CreateCharacter {

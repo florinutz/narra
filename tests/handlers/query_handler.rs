@@ -14,8 +14,11 @@ use narra::session::SessionStateManager;
 use pretty_assertions::assert_eq;
 use rmcp::handler::server::wrapper::Parameters;
 
-use crate::common::builders::{CharacterBuilder, LocationBuilder};
-use crate::common::harness::TestHarness;
+use crate::common::{
+    builders::{CharacterBuilder, LocationBuilder},
+    harness::TestHarness,
+    to_mutation_input, to_query_input,
+};
 
 // =============================================================================
 // LOOKUP OPERATIONS
@@ -46,7 +49,9 @@ async fn test_lookup_character_success() {
         entity_id: char_id.clone(),
         detail_level: Some(DetailLevel::Standard),
     };
-    let response = server.handle_query(Parameters(request)).await;
+    let response = server
+        .handle_query(Parameters(to_query_input(request)))
+        .await;
 
     // Verify success
     assert!(response.is_ok(), "Query should succeed");
@@ -87,7 +92,9 @@ async fn test_lookup_location_success() {
         entity_id: loc_id.clone(),
         detail_level: None,
     };
-    let response = server.handle_query(Parameters(request)).await;
+    let response = server
+        .handle_query(Parameters(to_query_input(request)))
+        .await;
 
     // Verify success
     assert!(response.is_ok(), "Query should succeed");
@@ -111,7 +118,9 @@ async fn test_lookup_nonexistent_entity() {
         entity_id: "character:nonexistent".to_string(),
         detail_level: None,
     };
-    let response = server.handle_query(Parameters(request)).await;
+    let response = server
+        .handle_query(Parameters(to_query_input(request)))
+        .await;
 
     // Verify error
     assert!(
@@ -157,7 +166,9 @@ async fn test_search_by_name() {
         limit: Some(10),
         cursor: None,
     };
-    let response = server.handle_query(Parameters(request)).await;
+    let response = server
+        .handle_query(Parameters(to_query_input(request)))
+        .await;
 
     // Verify success
     assert!(response.is_ok(), "Search should succeed");
@@ -205,7 +216,9 @@ async fn test_search_pagination() {
         limit: Some(10),
         cursor: None,
     };
-    let page1_response = server.handle_query(Parameters(page1_request)).await;
+    let page1_response = server
+        .handle_query(Parameters(to_query_input(page1_request)))
+        .await;
 
     assert!(page1_response.is_ok(), "Page 1 search should succeed");
     let page1 = page1_response.unwrap();
@@ -223,7 +236,9 @@ async fn test_search_pagination() {
         limit: Some(10),
         cursor: page1.next_cursor.clone(),
     };
-    let page2_response = server.handle_query(Parameters(page2_request)).await;
+    let page2_response = server
+        .handle_query(Parameters(to_query_input(page2_request)))
+        .await;
 
     assert!(page2_response.is_ok(), "Page 2 search should succeed");
     let page2 = page2_response.unwrap();
@@ -261,7 +276,9 @@ async fn test_search_empty_results() {
         limit: Some(20),
         cursor: None,
     };
-    let response = server.handle_query(Parameters(request)).await;
+    let response = server
+        .handle_query(Parameters(to_query_input(request)))
+        .await;
 
     assert!(response.is_ok(), "Empty search should succeed");
     let response = response.unwrap();
@@ -300,7 +317,9 @@ async fn test_overview_characters() {
         entity_type: "character".to_string(),
         limit: Some(20),
     };
-    let response = server.handle_query(Parameters(request)).await;
+    let response = server
+        .handle_query(Parameters(to_query_input(request)))
+        .await;
 
     assert!(response.is_ok(), "Overview should succeed");
     let response = response.unwrap();
@@ -323,7 +342,9 @@ async fn test_overview_unknown_type() {
         entity_type: "invalid_type".to_string(),
         limit: Some(20),
     };
-    let response = server.handle_query(Parameters(request)).await;
+    let response = server
+        .handle_query(Parameters(to_query_input(request)))
+        .await;
 
     assert!(response.is_err(), "Overview should fail for unknown type");
     let error_message = response.unwrap_err();
@@ -396,7 +417,9 @@ async fn test_centrality_metrics() {
         metrics: None,
         limit: Some(10),
     };
-    let response = server.handle_query(Parameters(request)).await;
+    let response = server
+        .handle_query(Parameters(to_query_input(request)))
+        .await;
 
     // Verify success
     assert!(response.is_ok(), "Centrality metrics should succeed");
@@ -500,7 +523,9 @@ async fn test_influence_propagation() {
         knowledge_fact: None,
         max_depth: Some(3),
     };
-    let response = server.handle_query(Parameters(request)).await;
+    let response = server
+        .handle_query(Parameters(to_query_input(request)))
+        .await;
 
     // Verify success
     assert!(response.is_ok(), "Influence propagation should succeed");
@@ -553,7 +578,9 @@ async fn test_dramatic_irony_report() {
         character_id: None,
         min_scene_threshold: Some(0),
     };
-    let response = server.handle_query(Parameters(request)).await;
+    let response = server
+        .handle_query(Parameters(to_query_input(request)))
+        .await;
 
     // Verify success
     assert!(response.is_ok(), "Dramatic irony report should succeed");
@@ -613,7 +640,7 @@ async fn test_semantic_join() {
         entity_type: Some("character".to_string()),
     };
     let _backfill_response = server
-        .handle_mutate(Parameters(backfill_request))
+        .handle_mutate(Parameters(to_mutation_input(backfill_request)))
         .await
         .expect("Backfill should succeed");
 
@@ -623,7 +650,9 @@ async fn test_semantic_join() {
         entity_types: Some(vec!["character".to_string()]),
         limit: Some(10),
     };
-    let response = server.handle_query(Parameters(request)).await;
+    let response = server
+        .handle_query(Parameters(to_query_input(request)))
+        .await;
 
     // Verify success
     assert!(response.is_ok(), "Semantic join should succeed");
@@ -694,7 +723,7 @@ async fn test_thematic_clustering() {
         entity_type: Some("character".to_string()),
     };
     let _backfill_response = server
-        .handle_mutate(Parameters(backfill_request))
+        .handle_mutate(Parameters(to_mutation_input(backfill_request)))
         .await
         .expect("Backfill should succeed");
 
@@ -703,7 +732,9 @@ async fn test_thematic_clustering() {
         entity_types: Some(vec!["character".to_string()]),
         num_themes: Some(2),
     };
-    let response = server.handle_query(Parameters(request)).await;
+    let response = server
+        .handle_query(Parameters(to_query_input(request)))
+        .await;
 
     // Verify success
     assert!(response.is_ok(), "Thematic clustering should succeed");

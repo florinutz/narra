@@ -188,9 +188,9 @@ Narra manages world state for fiction writing: characters, locations, events, sc
 
 ## Tools (5)
 
-**query** — Read-only (37 operations): Lookup, Search, SemanticSearch, HybridSearch, GraphTraversal, Temporal, Overview, ListNotes, GetFact, ListFacts, ReverseQuery, ConnectionPath, CentralityMetrics, InfluencePropagation, DramaticIronyReport, SemanticJoin, ThematicClustering, SemanticKnowledge, SemanticGraphSearch, ArcHistory, ArcComparison, ArcDrift, ArcMoment, PerspectiveSearch, PerceptionGap, PerceptionMatrix, PerceptionShift, UnresolvedTensions, ThematicGaps, SimilarRelationships, EmbeddingHealth, WhatIf, ValidateEntity, InvestigateContradictions, AnalyzeImpact.
+**query** — Read-only (40 operations): Lookup, Search, SemanticSearch, HybridSearch, GraphTraversal, Temporal, Overview, ListNotes, GetFact, ListFacts, ReverseQuery, ConnectionPath, CentralityMetrics, InfluencePropagation, DramaticIronyReport, SemanticJoin, ThematicClustering, SemanticKnowledge, SemanticGraphSearch, ArcHistory, ArcComparison, ArcDrift, ArcMoment, PerspectiveSearch, PerceptionGap, PerceptionMatrix, PerceptionShift, UnresolvedTensions, ThematicGaps, SimilarRelationships, KnowledgeConflicts, EmbeddingHealth, WhatIf, ValidateEntity, InvestigateContradictions, KnowledgeAsymmetries, SituationReport, CharacterDossier, ScenePlanning, AnalyzeImpact.
 
-**mutate** — Write (21 operations): CreateCharacter, CreateLocation, CreateEvent, CreateScene, Update, RecordKnowledge, Delete, CreateNote, AttachNote, DetachNote, CreateFact, UpdateFact, DeleteFact, LinkFact, UnlinkFact, CreateRelationship, BatchCreateCharacters, BatchCreateLocations, BatchCreateEvents, BatchCreateRelationships, BackfillEmbeddings, BaselineArcSnapshots, ProtectEntity, UnprotectEntity, ImportYaml.
+**mutate** — Write (25 operations): CreateCharacter, CreateLocation, CreateEvent, CreateScene, Update, RecordKnowledge, Delete, CreateNote, AttachNote, DetachNote, CreateFact, UpdateFact, DeleteFact, LinkFact, UnlinkFact, CreateRelationship, BatchCreateCharacters, BatchCreateLocations, BatchCreateEvents, BatchCreateRelationships, BackfillEmbeddings, BaselineArcSnapshots, ProtectEntity, UnprotectEntity, ImportYaml.
 
 **session** — Context (3 operations): GetContext, PinEntity, UnpinEntity.
 

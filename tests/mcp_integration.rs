@@ -8,8 +8,9 @@
 
 mod common;
 
-use common::harness::TestHarness;
+use common::{harness::TestHarness, to_mutation_input, to_query_input};
 use narra::mcp::{DetailLevel, MutationRequest, QueryRequest};
+use rmcp::handler::server::wrapper::Parameters;
 
 #[tokio::test]
 async fn test_create_and_lookup_character() {
@@ -27,7 +28,7 @@ async fn test_create_and_lookup_character() {
     };
 
     let create_result = server
-        .handle_mutate(rmcp::handler::server::wrapper::Parameters(create_request))
+        .handle_mutate(Parameters(to_mutation_input(create_request)))
         .await
         .expect("Create character failed");
 
@@ -42,7 +43,7 @@ async fn test_create_and_lookup_character() {
     };
 
     let lookup_result = server
-        .handle_query(rmcp::handler::server::wrapper::Parameters(lookup_request))
+        .handle_query(Parameters(to_query_input(lookup_request)))
         .await
         .expect("Lookup failed");
 
@@ -67,7 +68,7 @@ async fn test_search_with_fuzzy_matching() {
             profile: None,
         };
         server
-            .handle_mutate(rmcp::handler::server::wrapper::Parameters(request))
+            .handle_mutate(Parameters(to_mutation_input(request)))
             .await
             .expect("Create failed");
     }
@@ -81,7 +82,7 @@ async fn test_search_with_fuzzy_matching() {
     };
 
     let search_result = server
-        .handle_query(rmcp::handler::server::wrapper::Parameters(search_request))
+        .handle_query(Parameters(to_query_input(search_request)))
         .await
         .expect("Search failed");
 
@@ -109,7 +110,7 @@ async fn test_record_and_query_knowledge() {
         profile: None,
     };
     let char_result = server
-        .handle_mutate(rmcp::handler::server::wrapper::Parameters(char_request))
+        .handle_mutate(Parameters(to_mutation_input(char_request)))
         .await
         .unwrap();
     let character_id = char_result.entity.id;
@@ -122,7 +123,7 @@ async fn test_record_and_query_knowledge() {
         parent_id: None,
     };
     let location_result = server
-        .handle_mutate(rmcp::handler::server::wrapper::Parameters(location_request))
+        .handle_mutate(Parameters(to_mutation_input(location_request)))
         .await
         .unwrap();
     let location_id = location_result.entity.id;
@@ -140,9 +141,7 @@ async fn test_record_and_query_knowledge() {
     };
 
     let knowledge_result = server
-        .handle_mutate(rmcp::handler::server::wrapper::Parameters(
-            knowledge_request,
-        ))
+        .handle_mutate(Parameters(to_mutation_input(knowledge_request)))
         .await
         .expect("Record knowledge failed");
 
@@ -156,7 +155,7 @@ async fn test_record_and_query_knowledge() {
     };
 
     let temporal_result = server
-        .handle_query(rmcp::handler::server::wrapper::Parameters(temporal_request))
+        .handle_query(Parameters(to_query_input(temporal_request)))
         .await
         .expect("Temporal query failed");
 
@@ -172,7 +171,7 @@ async fn test_impact_analysis() {
 
     // Create interconnected entities
     let char1 = server
-        .handle_mutate(rmcp::handler::server::wrapper::Parameters(
+        .handle_mutate(Parameters(to_mutation_input(
             MutationRequest::CreateCharacter {
                 id: None,
                 name: "Alice".to_string(),
@@ -181,12 +180,12 @@ async fn test_impact_analysis() {
                 description: None,
                 profile: None,
             },
-        ))
+        )))
         .await
         .unwrap();
 
     let char2 = server
-        .handle_mutate(rmcp::handler::server::wrapper::Parameters(
+        .handle_mutate(Parameters(to_mutation_input(
             MutationRequest::CreateCharacter {
                 id: None,
                 name: "Bob".to_string(),
@@ -195,13 +194,13 @@ async fn test_impact_analysis() {
                 description: None,
                 profile: None,
             },
-        ))
+        )))
         .await
         .unwrap();
 
     // Create relationship (knowledge from Alice about Bob, use initial method)
     server
-        .handle_mutate(rmcp::handler::server::wrapper::Parameters(
+        .handle_mutate(Parameters(to_mutation_input(
             MutationRequest::RecordKnowledge {
                 character_id: char1.entity.id.clone(),
                 target_id: char2.entity.id.clone(),
@@ -211,15 +210,13 @@ async fn test_impact_analysis() {
                 source_character_id: None,
                 event_id: None,
             },
-        ))
+        )))
         .await
         .unwrap();
 
     // Protect Bob
     server
-        .handle_protect_entity(rmcp::handler::server::wrapper::Parameters(
-            char2.entity.id.clone(),
-        ))
+        .handle_protect_entity(Parameters(char2.entity.id.clone()))
         .await
         .expect("Protect failed");
 
@@ -232,7 +229,7 @@ async fn test_impact_analysis() {
     };
 
     let impact_result = server
-        .handle_analyze_impact(rmcp::handler::server::wrapper::Parameters(impact_request))
+        .handle_analyze_impact(Parameters(impact_request))
         .await
         .expect("Impact analysis failed");
 
@@ -249,7 +246,7 @@ async fn test_pagination_with_cursors() {
     // Create many characters
     for i in 0..25 {
         server
-            .handle_mutate(rmcp::handler::server::wrapper::Parameters(
+            .handle_mutate(Parameters(to_mutation_input(
                 MutationRequest::CreateCharacter {
                     id: None,
                     name: format!("Character {}", i),
@@ -258,7 +255,7 @@ async fn test_pagination_with_cursors() {
                     description: None,
                     profile: None,
                 },
-            ))
+            )))
             .await
             .unwrap();
     }
@@ -270,7 +267,7 @@ async fn test_pagination_with_cursors() {
     };
 
     let page1 = server
-        .handle_query(rmcp::handler::server::wrapper::Parameters(page1_request))
+        .handle_query(Parameters(to_query_input(page1_request)))
         .await
         .expect("Page 1 failed");
 
@@ -285,7 +282,7 @@ async fn test_update_with_impact() {
 
     // Create a character
     let create_result = server
-        .handle_mutate(rmcp::handler::server::wrapper::Parameters(
+        .handle_mutate(Parameters(to_mutation_input(
             MutationRequest::CreateCharacter {
                 id: None,
                 name: "Original Name".to_string(),
@@ -294,7 +291,7 @@ async fn test_update_with_impact() {
                 description: None,
                 profile: None,
             },
-        ))
+        )))
         .await
         .unwrap();
 
@@ -310,7 +307,7 @@ async fn test_update_with_impact() {
     };
 
     let update_result = server
-        .handle_mutate(rmcp::handler::server::wrapper::Parameters(update_request))
+        .handle_mutate(Parameters(to_mutation_input(update_request)))
         .await
         .expect("Update failed");
 
@@ -329,7 +326,7 @@ async fn test_graph_traversal() {
 
     // Create characters with relationships via knowledge
     let char1 = server
-        .handle_mutate(rmcp::handler::server::wrapper::Parameters(
+        .handle_mutate(Parameters(to_mutation_input(
             MutationRequest::CreateCharacter {
                 id: None,
                 name: "Node A".to_string(),
@@ -338,12 +335,12 @@ async fn test_graph_traversal() {
                 description: None,
                 profile: None,
             },
-        ))
+        )))
         .await
         .unwrap();
 
     let char2 = server
-        .handle_mutate(rmcp::handler::server::wrapper::Parameters(
+        .handle_mutate(Parameters(to_mutation_input(
             MutationRequest::CreateCharacter {
                 id: None,
                 name: "Node B".to_string(),
@@ -352,13 +349,13 @@ async fn test_graph_traversal() {
                 description: None,
                 profile: None,
             },
-        ))
+        )))
         .await
         .unwrap();
 
     // Create connection via knowledge (use initial method)
     server
-        .handle_mutate(rmcp::handler::server::wrapper::Parameters(
+        .handle_mutate(Parameters(to_mutation_input(
             MutationRequest::RecordKnowledge {
                 character_id: char1.entity.id.clone(),
                 target_id: char2.entity.id.clone(),
@@ -368,7 +365,7 @@ async fn test_graph_traversal() {
                 source_character_id: None,
                 event_id: None,
             },
-        ))
+        )))
         .await
         .unwrap();
 
@@ -380,9 +377,7 @@ async fn test_graph_traversal() {
     };
 
     let traversal_result = server
-        .handle_query(rmcp::handler::server::wrapper::Parameters(
-            traversal_request,
-        ))
+        .handle_query(Parameters(to_query_input(traversal_request)))
         .await
         .expect("Graph traversal failed");
 

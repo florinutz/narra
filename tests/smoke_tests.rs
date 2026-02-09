@@ -6,6 +6,7 @@
 mod common;
 
 use common::harness::TestHarness;
+use common::{to_mutation_input, to_query_input, to_session_input};
 use narra::mcp::tools::export::ExportRequest;
 use narra::mcp::tools::graph::GraphRequest;
 use narra::mcp::{MutationRequest, NarraServer, QueryRequest, SessionRequest};
@@ -22,7 +23,7 @@ async fn create_test_character(server: &NarraServer, name: &str) -> String {
         profile: None,
     };
     let result = server
-        .mutate(Parameters(request))
+        .mutate(Parameters(to_mutation_input(request)))
         .await
         .expect("create character should succeed");
     result.0.entity.id
@@ -46,7 +47,7 @@ async fn smoke_test_query() {
     };
 
     let result = server
-        .query(Parameters(request))
+        .query(Parameters(to_query_input(request)))
         .await
         .expect("query should succeed");
 
@@ -76,7 +77,7 @@ async fn smoke_test_mutate() {
     };
 
     let result = server
-        .mutate(Parameters(request))
+        .mutate(Parameters(to_mutation_input(request)))
         .await
         .expect("mutate should succeed");
 
@@ -105,7 +106,7 @@ async fn smoke_test_analyze_impact_via_query() {
     };
 
     let result = server
-        .query(Parameters(request))
+        .query(Parameters(to_query_input(request)))
         .await
         .expect("analyze_impact via query should succeed");
 
@@ -128,7 +129,7 @@ async fn smoke_test_protect_entity_via_mutate() {
     };
 
     let result = server
-        .mutate(Parameters(request))
+        .mutate(Parameters(to_mutation_input(request)))
         .await
         .expect("protect_entity via mutate should succeed");
 
@@ -146,16 +147,20 @@ async fn smoke_test_unprotect_entity_via_mutate() {
     let character_id = create_test_character(&server, "Unprotect Test Character").await;
 
     server
-        .mutate(Parameters(MutationRequest::ProtectEntity {
-            entity_id: character_id.clone(),
-        }))
+        .mutate(Parameters(to_mutation_input(
+            MutationRequest::ProtectEntity {
+                entity_id: character_id.clone(),
+            },
+        )))
         .await
         .expect("protect should succeed");
 
     let result = server
-        .mutate(Parameters(MutationRequest::UnprotectEntity {
-            entity_id: character_id,
-        }))
+        .mutate(Parameters(to_mutation_input(
+            MutationRequest::UnprotectEntity {
+                entity_id: character_id,
+            },
+        )))
         .await
         .expect("unprotect via mutate should succeed");
 
@@ -179,7 +184,7 @@ async fn smoke_test_pin_entity_via_session() {
     };
 
     let result = server
-        .session(Parameters(request))
+        .session(Parameters(to_session_input(request)))
         .await
         .expect("pin_entity via session should succeed");
 
@@ -197,16 +202,16 @@ async fn smoke_test_unpin_entity_via_session() {
     let character_id = create_test_character(&server, "Unpin Test Character").await;
 
     server
-        .session(Parameters(SessionRequest::PinEntity {
+        .session(Parameters(to_session_input(SessionRequest::PinEntity {
             entity_id: character_id.clone(),
-        }))
+        })))
         .await
         .expect("pin should succeed");
 
     let result = server
-        .session(Parameters(SessionRequest::UnpinEntity {
+        .session(Parameters(to_session_input(SessionRequest::UnpinEntity {
             entity_id: character_id.clone(),
-        }))
+        })))
         .await
         .expect("unpin via session should succeed");
 
@@ -224,7 +229,7 @@ async fn smoke_test_get_session_context_via_session() {
     let request = SessionRequest::GetContext { force_full: false };
 
     let result = server
-        .session(Parameters(request))
+        .session(Parameters(to_session_input(request)))
         .await
         .expect("get_session_context via session should succeed");
 
@@ -297,7 +302,7 @@ async fn smoke_test_validate_entity_via_query() {
     };
 
     let result = server
-        .query(Parameters(request))
+        .query(Parameters(to_query_input(request)))
         .await
         .expect("validate_entity via query should succeed");
 
@@ -324,7 +329,7 @@ async fn smoke_test_investigate_contradictions_via_query() {
     };
 
     let result = server
-        .query(Parameters(request))
+        .query(Parameters(to_query_input(request)))
         .await
         .expect("investigate_contradictions via query should succeed");
 

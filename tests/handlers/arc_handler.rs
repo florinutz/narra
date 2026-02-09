@@ -9,8 +9,11 @@ use narra::repository::{
 };
 use rmcp::handler::server::wrapper::Parameters;
 
-use crate::common::builders::{CharacterBuilder, KnowledgeBuilder};
-use crate::common::harness::TestHarness;
+use crate::common::{
+    builders::{CharacterBuilder, KnowledgeBuilder},
+    harness::TestHarness,
+    to_query_input,
+};
 
 // =============================================================================
 // ARC HISTORY TESTS
@@ -35,7 +38,7 @@ async fn test_arc_history_no_snapshots() {
     };
 
     let response = server
-        .handle_query(Parameters(request))
+        .handle_query(Parameters(to_query_input(request)))
         .await
         .expect("ArcHistory should succeed even without snapshots");
 
@@ -57,7 +60,9 @@ async fn test_arc_history_nonexistent() {
         limit: Some(50),
     };
 
-    let response = server.handle_query(Parameters(request)).await;
+    let response = server
+        .handle_query(Parameters(to_query_input(request)))
+        .await;
 
     // Should handle gracefully (either error or empty result)
     assert!(
@@ -94,7 +99,9 @@ async fn test_arc_comparison_no_snapshots() {
         window: None,
     };
 
-    let response = server.handle_query(Parameters(request)).await;
+    let response = server
+        .handle_query(Parameters(to_query_input(request)))
+        .await;
 
     // Without snapshots, should return an error about missing arc data
     assert!(
@@ -133,7 +140,9 @@ async fn test_arc_moment_no_snapshots() {
         event_id: None,
     };
 
-    let response = server.handle_query(Parameters(request)).await;
+    let response = server
+        .handle_query(Parameters(to_query_input(request)))
+        .await;
 
     // Without snapshots, should error
     assert!(
@@ -175,7 +184,9 @@ async fn test_what_if_no_embedding() {
         source_character: None,
     };
 
-    let response = server.handle_query(Parameters(request)).await;
+    let response = server
+        .handle_query(Parameters(to_query_input(request)))
+        .await;
 
     // WhatIf requires embeddings - should error with Noop
     assert!(

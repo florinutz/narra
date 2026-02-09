@@ -3,8 +3,8 @@
 //! Tests handlers correctly reject invalid input across all operations.
 //! Uses insta snapshots for error message stability.
 
-use crate::common::builders::CharacterBuilder;
 use crate::common::harness::TestHarness;
+use crate::common::{builders::CharacterBuilder, to_mutation_input, to_query_input};
 
 use insta::assert_snapshot;
 use narra::mcp::types::{MutationRequest, QueryRequest};
@@ -131,7 +131,9 @@ async fn test_query_lookup_malformed_id() {
         detail_level: None,
     };
 
-    let response = server.handle_query(Parameters(request)).await;
+    let response = server
+        .handle_query(Parameters(to_query_input(request)))
+        .await;
 
     assert!(response.is_err(), "Should reject malformed entity_id");
     let error_msg = response.unwrap_err();
@@ -149,7 +151,9 @@ async fn test_mutation_update_malformed_entity_id() {
         fields: serde_json::json!({"name": "New Name"}),
     };
 
-    let response = server.handle_mutate(Parameters(request)).await;
+    let response = server
+        .handle_mutate(Parameters(to_mutation_input(request)))
+        .await;
 
     assert!(
         response.is_err(),
@@ -175,7 +179,9 @@ async fn test_mutation_record_knowledge_malformed_character_id() {
         event_id: None,
     };
 
-    let response = server.handle_mutate(Parameters(request)).await;
+    let response = server
+        .handle_mutate(Parameters(to_mutation_input(request)))
+        .await;
 
     assert!(
         response.is_err(),
@@ -204,7 +210,9 @@ async fn test_query_lookup_nonexistent_entity() {
         detail_level: None,
     };
 
-    let response = server.handle_query(Parameters(request)).await;
+    let response = server
+        .handle_query(Parameters(to_query_input(request)))
+        .await;
 
     assert!(response.is_err(), "Should reject non-existent entity");
     let error_msg = response.unwrap_err();
@@ -223,7 +231,9 @@ async fn test_mutation_delete_nonexistent_entity() {
         hard: Some(false),
     };
 
-    let response = server.handle_mutate(Parameters(request)).await;
+    let response = server
+        .handle_mutate(Parameters(to_mutation_input(request)))
+        .await;
 
     assert!(
         response.is_err(),
@@ -252,7 +262,9 @@ async fn test_query_search_negative_limit() {
         cursor: None,
     };
 
-    let response = server.handle_query(Parameters(request)).await;
+    let response = server
+        .handle_query(Parameters(to_query_input(request)))
+        .await;
 
     // Zero limit might be valid (return empty results) or error
     // This test documents actual behavior
@@ -293,7 +305,9 @@ async fn test_query_graph_traversal_zero_depth() {
         format: None,
     };
 
-    let response = server.handle_query(Parameters(request)).await;
+    let response = server
+        .handle_query(Parameters(to_query_input(request)))
+        .await;
 
     // Zero depth might return just the starting entity or error
     // This test documents actual behavior

@@ -8,8 +8,11 @@ use narra::models::relationship::{create_relationship, RelationshipCreate};
 use narra::repository::{EntityRepository, SurrealEntityRepository};
 use rmcp::handler::server::wrapper::Parameters;
 
-use crate::common::builders::{CharacterBuilder, EventBuilder, LocationBuilder, SceneBuilder};
-use crate::common::harness::TestHarness;
+use crate::common::{
+    builders::{CharacterBuilder, EventBuilder, LocationBuilder, SceneBuilder},
+    harness::TestHarness,
+    to_query_input,
+};
 
 // =============================================================================
 // CONNECTION PATH TESTS
@@ -53,7 +56,7 @@ async fn test_connection_path_direct() {
     };
 
     let response = server
-        .handle_query(Parameters(request))
+        .handle_query(Parameters(to_query_input(request)))
         .await
         .expect("ConnectionPath should succeed");
 
@@ -92,7 +95,9 @@ async fn test_connection_path_no_connection() {
         include_events: Some(false),
     };
 
-    let response = server.handle_query(Parameters(request)).await;
+    let response = server
+        .handle_query(Parameters(to_query_input(request)))
+        .await;
 
     // Should succeed but indicate no paths found
     assert!(response.is_ok(), "Should succeed even with no paths");
@@ -162,7 +167,7 @@ async fn test_connection_path_indirect() {
     };
 
     let response = server
-        .handle_query(Parameters(request))
+        .handle_query(Parameters(to_query_input(request)))
         .await
         .expect("ConnectionPath should find indirect path");
 
@@ -226,7 +231,7 @@ async fn test_reverse_query_character_scenes() {
     };
 
     let response = server
-        .handle_query(Parameters(request))
+        .handle_query(Parameters(to_query_input(request)))
         .await
         .expect("ReverseQuery should succeed");
 
@@ -255,7 +260,7 @@ async fn test_reverse_query_no_references() {
     };
 
     let response = server
-        .handle_query(Parameters(request))
+        .handle_query(Parameters(to_query_input(request)))
         .await
         .expect("ReverseQuery should succeed even with no refs");
 

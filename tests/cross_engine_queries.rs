@@ -10,7 +10,7 @@ mod common;
 
 use std::sync::Arc;
 
-use common::harness::TestHarness;
+use common::{harness::TestHarness, to_mutation_input, to_query_input};
 use narra::embedding::backfill::BackfillService;
 use narra::embedding::composite::knowledge_composite;
 use narra::embedding::{EmbeddingConfig, LocalEmbeddingService, NoopEmbeddingService};
@@ -130,7 +130,9 @@ async fn test_semantic_knowledge_no_embedding_service() {
         character_id: None,
         limit: None,
     };
-    let result = server.handle_query(Parameters(request)).await;
+    let result = server
+        .handle_query(Parameters(to_query_input(request)))
+        .await;
     assert!(result.is_err(), "Should error without embedding service");
     assert!(
         result.unwrap_err().contains("unavailable"),
@@ -151,7 +153,9 @@ async fn test_semantic_graph_search_no_embedding_service() {
         entity_types: None,
         limit: None,
     };
-    let result = server.handle_query(Parameters(request)).await;
+    let result = server
+        .handle_query(Parameters(to_query_input(request)))
+        .await;
     assert!(result.is_err(), "Should error without embedding service");
     assert!(
         result.unwrap_err().contains("unavailable"),
@@ -233,7 +237,7 @@ async fn test_semantic_knowledge_finds_by_meaning() {
             event_id: None,
         };
         server
-            .handle_mutate(Parameters(request))
+            .handle_mutate(Parameters(to_mutation_input(request)))
             .await
             .expect("RecordKnowledge should succeed");
     }
@@ -251,7 +255,7 @@ async fn test_semantic_knowledge_finds_by_meaning() {
         limit: Some(5),
     };
     let response = server
-        .handle_query(Parameters(request))
+        .handle_query(Parameters(to_query_input(request)))
         .await
         .expect("SemanticKnowledge should succeed");
 
@@ -318,7 +322,7 @@ async fn test_semantic_knowledge_character_filter() {
         event_id: None,
     };
     server
-        .handle_mutate(Parameters(alice_request))
+        .handle_mutate(Parameters(to_mutation_input(alice_request)))
         .await
         .expect("Should record Alice's knowledge");
 
@@ -332,7 +336,7 @@ async fn test_semantic_knowledge_character_filter() {
         event_id: None,
     };
     server
-        .handle_mutate(Parameters(bob_request))
+        .handle_mutate(Parameters(to_mutation_input(bob_request)))
         .await
         .expect("Should record Bob's knowledge");
 
@@ -355,7 +359,7 @@ async fn test_semantic_knowledge_character_filter() {
         limit: Some(10),
     };
     let response = server
-        .handle_query(Parameters(request))
+        .handle_query(Parameters(to_query_input(request)))
         .await
         .expect("Filtered SemanticKnowledge should succeed");
 
@@ -391,7 +395,7 @@ async fn test_semantic_knowledge_empty_results() {
         limit: None,
     };
     let response = server
-        .handle_query(Parameters(request))
+        .handle_query(Parameters(to_query_input(request)))
         .await
         .expect("Should return empty, not error");
 
@@ -476,7 +480,7 @@ async fn test_semantic_graph_search_ranks_connected_entities() {
         label: Some("spy network".to_string()),
     };
     server
-        .handle_mutate(Parameters(create_rel_ab))
+        .handle_mutate(Parameters(to_mutation_input(create_rel_ab)))
         .await
         .expect("Should create Alice-Bob relationship");
 
@@ -488,7 +492,7 @@ async fn test_semantic_graph_search_ranks_connected_entities() {
         label: Some("battle companions".to_string()),
     };
     server
-        .handle_mutate(Parameters(create_rel_ac))
+        .handle_mutate(Parameters(to_mutation_input(create_rel_ac)))
         .await
         .expect("Should create Alice-Carol relationship");
 
@@ -501,7 +505,7 @@ async fn test_semantic_graph_search_ranks_connected_entities() {
         limit: Some(10),
     };
     let response = server
-        .handle_query(Parameters(request))
+        .handle_query(Parameters(to_query_input(request)))
         .await
         .expect("SemanticGraphSearch should succeed");
 
@@ -581,7 +585,7 @@ async fn test_semantic_graph_search_type_filter() {
         label: None,
     };
     server
-        .handle_mutate(Parameters(create_rel))
+        .handle_mutate(Parameters(to_mutation_input(create_rel)))
         .await
         .expect("Should create relationship");
 
@@ -594,7 +598,7 @@ async fn test_semantic_graph_search_type_filter() {
         limit: Some(10),
     };
     let response = server
-        .handle_query(Parameters(request))
+        .handle_query(Parameters(to_query_input(request)))
         .await
         .expect("Should succeed with type filter");
 
@@ -636,7 +640,7 @@ async fn test_semantic_graph_search_no_connections() {
         limit: None,
     };
     let response = server
-        .handle_query(Parameters(request))
+        .handle_query(Parameters(to_query_input(request)))
         .await
         .expect("Should return empty, not error");
 
@@ -701,7 +705,7 @@ async fn test_record_knowledge_generates_embedding() {
         event_id: Some(event.id.to_string()),
     };
     server
-        .handle_mutate(Parameters(request))
+        .handle_mutate(Parameters(to_mutation_input(request)))
         .await
         .expect("RecordKnowledge should succeed");
 

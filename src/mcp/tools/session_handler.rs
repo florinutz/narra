@@ -19,8 +19,9 @@ impl NarraServer {
         full_request.extend(input.params);
 
         // Deserialize to SessionRequest
-        let request: SessionRequest = serde_json::from_value(serde_json::Value::Object(full_request))
-            .map_err(|e| format!("Invalid session parameters: {}", e))?;
+        let request: SessionRequest =
+            serde_json::from_value(serde_json::Value::Object(full_request))
+                .map_err(|e| format!("Invalid session parameters: {}", e))?;
 
         match request {
             SessionRequest::GetContext { force_full: _ } => {

@@ -13,8 +13,8 @@ use narra::models::relationship::{create_relationship, RelationshipCreate};
 use narra::repository::{EntityRepository, SurrealEntityRepository};
 use rmcp::handler::server::wrapper::Parameters;
 
-use crate::common::builders::CharacterBuilder;
 use crate::common::harness::TestHarness;
+use crate::common::{builders::CharacterBuilder, to_query_input};
 
 // ============================================================================
 // GRAPH TRAVERSAL TESTS
@@ -60,7 +60,7 @@ async fn test_graph_traversal_success() {
     };
 
     let response = server
-        .handle_query(Parameters(request))
+        .handle_query(Parameters(to_query_input(request)))
         .await
         .expect("Graph traversal should succeed");
 
@@ -137,7 +137,7 @@ async fn test_graph_traversal_depth_1() {
     };
 
     let response = server
-        .handle_query(Parameters(request))
+        .handle_query(Parameters(to_query_input(request)))
         .await
         .expect("Depth-1 traversal should succeed");
 
@@ -229,7 +229,7 @@ async fn test_graph_traversal_depth_2() {
     };
 
     let response = server
-        .handle_query(Parameters(request))
+        .handle_query(Parameters(to_query_input(request)))
         .await
         .expect("Depth-2 traversal should succeed");
 
@@ -277,7 +277,7 @@ async fn test_graph_traversal_no_connections() {
     };
 
     let response = server
-        .handle_query(Parameters(request))
+        .handle_query(Parameters(to_query_input(request)))
         .await
         .expect("Traversal should succeed even with no connections");
 
@@ -305,7 +305,9 @@ async fn test_graph_traversal_nonexistent_entity() {
 
     // Should not error - graph traversal returns empty for non-existent nodes
     // (as the BFS simply finds no neighbors from a node that doesn't exist)
-    let response = server.handle_query(Parameters(request)).await;
+    let response = server
+        .handle_query(Parameters(to_query_input(request)))
+        .await;
 
     // The handler returns success with empty results rather than an error
     // because the BFS algorithm gracefully handles missing starting nodes
@@ -729,7 +731,7 @@ async fn test_graph_traversal_response_structure() {
     };
 
     let response = server
-        .handle_query(Parameters(request))
+        .handle_query(Parameters(to_query_input(request)))
         .await
         .expect("Traversal should succeed");
 

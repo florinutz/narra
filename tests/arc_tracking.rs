@@ -13,7 +13,7 @@ mod common;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use common::harness::TestHarness;
+use common::{harness::TestHarness, to_mutation_input, to_query_input};
 use narra::embedding::backfill::BackfillService;
 use narra::embedding::{
     EmbeddingConfig, LocalEmbeddingService, NoopEmbeddingService, StalenessManager,
@@ -284,7 +284,7 @@ async fn test_baseline_arc_snapshots_creates_snapshots() {
     // Run BaselineArcSnapshots
     let request = MutationRequest::BaselineArcSnapshots { entity_type: None };
     let response = server
-        .handle_mutate(Parameters(request))
+        .handle_mutate(Parameters(to_mutation_input(request)))
         .await
         .expect("BaselineArcSnapshots should succeed");
 
@@ -341,7 +341,7 @@ async fn test_baseline_arc_snapshots_idempotent() {
     // Run twice
     let request1 = MutationRequest::BaselineArcSnapshots { entity_type: None };
     let resp1 = server
-        .handle_mutate(Parameters(request1))
+        .handle_mutate(Parameters(to_mutation_input(request1)))
         .await
         .expect("First run should succeed");
     assert!(
@@ -352,7 +352,7 @@ async fn test_baseline_arc_snapshots_idempotent() {
 
     let request2 = MutationRequest::BaselineArcSnapshots { entity_type: None };
     let resp2 = server
-        .handle_mutate(Parameters(request2))
+        .handle_mutate(Parameters(to_mutation_input(request2)))
         .await
         .expect("Second run should succeed");
     assert!(
@@ -412,7 +412,7 @@ async fn test_baseline_arc_snapshots_type_filter() {
         entity_type: Some("knowledge".to_string()),
     };
     let resp = server
-        .handle_mutate(Parameters(request))
+        .handle_mutate(Parameters(to_mutation_input(request)))
         .await
         .expect("Should succeed");
     assert!(
@@ -426,7 +426,7 @@ async fn test_baseline_arc_snapshots_type_filter() {
         entity_type: Some("character".to_string()),
     };
     let resp = server
-        .handle_mutate(Parameters(request))
+        .handle_mutate(Parameters(to_mutation_input(request)))
         .await
         .expect("Should succeed");
     assert!(
@@ -445,7 +445,9 @@ async fn test_baseline_arc_snapshots_invalid_type() {
     let request = MutationRequest::BaselineArcSnapshots {
         entity_type: Some("location".to_string()),
     };
-    let result = server.handle_mutate(Parameters(request)).await;
+    let result = server
+        .handle_mutate(Parameters(to_mutation_input(request)))
+        .await;
     assert!(result.is_err(), "Should reject 'location' as entity_type");
     assert!(
         result.unwrap_err().contains("Invalid entity_type"),
@@ -523,7 +525,7 @@ async fn test_arc_history_returns_chronological_snapshots() {
         limit: Some(50),
     };
     let response = server
-        .handle_query(Parameters(request))
+        .handle_query(Parameters(to_query_input(request)))
         .await
         .expect("ArcHistory should succeed");
 
@@ -567,7 +569,7 @@ async fn test_arc_history_empty() {
         limit: None,
     };
     let response = server
-        .handle_query(Parameters(request))
+        .handle_query(Parameters(to_query_input(request)))
         .await
         .expect("Should return empty result, not error");
 
@@ -614,7 +616,7 @@ async fn test_arc_history_limit() {
         limit: Some(3),
     };
     let response = server
-        .handle_query(Parameters(request))
+        .handle_query(Parameters(to_query_input(request)))
         .await
         .expect("Should succeed");
     assert_eq!(response.results.len(), 3, "Should respect limit of 3");
@@ -666,7 +668,7 @@ async fn test_arc_comparison_converging() {
         window: None,
     };
     let response = server
-        .handle_query(Parameters(request))
+        .handle_query(Parameters(to_query_input(request)))
         .await
         .expect("ArcComparison should succeed");
 
@@ -750,7 +752,7 @@ async fn test_arc_comparison_with_window() {
         window: Some("recent:2".to_string()),
     };
     let response = server
-        .handle_query(Parameters(request))
+        .handle_query(Parameters(to_query_input(request)))
         .await
         .expect("ArcComparison with window should succeed");
     assert_eq!(response.results.len(), 1);
@@ -771,7 +773,9 @@ async fn test_arc_comparison_missing_snapshots() {
         entity_id_b: "character:bob".to_string(),
         window: None,
     };
-    let result = server.handle_query(Parameters(request)).await;
+    let result = server
+        .handle_query(Parameters(to_query_input(request)))
+        .await;
     assert!(result.is_err(), "Should error when no snapshots exist");
     assert!(
         result.unwrap_err().contains("BaselineArcSnapshots"),
@@ -820,7 +824,7 @@ async fn test_arc_drift_ranks_by_drift() {
         limit: Some(10),
     };
     let response = server
-        .handle_query(Parameters(request))
+        .handle_query(Parameters(to_query_input(request)))
         .await
         .expect("ArcDrift should succeed");
 
@@ -898,7 +902,7 @@ async fn test_arc_drift_type_filter() {
         limit: None,
     };
     let response = server
-        .handle_query(Parameters(request))
+        .handle_query(Parameters(to_query_input(request)))
         .await
         .expect("Should succeed");
     assert_eq!(response.results.len(), 1, "Should only show knowledge");
@@ -916,7 +920,7 @@ async fn test_arc_drift_empty() {
         limit: None,
     };
     let response = server
-        .handle_query(Parameters(request))
+        .handle_query(Parameters(to_query_input(request)))
         .await
         .expect("Should succeed with empty results");
     assert_eq!(response.results.len(), 0);
@@ -951,7 +955,7 @@ async fn test_arc_moment_latest() {
         event_id: None,
     };
     let response = server
-        .handle_query(Parameters(request))
+        .handle_query(Parameters(to_query_input(request)))
         .await
         .expect("ArcMoment should succeed");
 
@@ -977,7 +981,9 @@ async fn test_arc_moment_no_snapshots() {
         entity_id: "character:nonexistent".to_string(),
         event_id: None,
     };
-    let result = server.handle_query(Parameters(request)).await;
+    let result = server
+        .handle_query(Parameters(to_query_input(request)))
+        .await;
     assert!(result.is_err(), "Should error with no snapshots");
     assert!(
         result.unwrap_err().contains("BaselineArcSnapshots"),
@@ -1032,7 +1038,7 @@ async fn test_arc_moment_at_event() {
         event_id: Some(event_id),
     };
     let response = server
-        .handle_query(Parameters(request))
+        .handle_query(Parameters(to_query_input(request)))
         .await
         .expect("ArcMoment at event should succeed");
 
@@ -1216,7 +1222,7 @@ async fn test_snapshot_captures_event_id() {
     };
 
     let _resp = server
-        .handle_mutate(Parameters(request))
+        .handle_mutate(Parameters(to_mutation_input(request)))
         .await
         .expect("RecordKnowledge should succeed");
 
@@ -1365,7 +1371,7 @@ async fn test_full_arc_tracking_workflow() {
     // Step 2: Capture baseline snapshots
     let baseline_request = MutationRequest::BaselineArcSnapshots { entity_type: None };
     let baseline_resp = server
-        .handle_mutate(Parameters(baseline_request))
+        .handle_mutate(Parameters(to_mutation_input(baseline_request)))
         .await
         .expect("Baseline should succeed");
     assert!(
@@ -1397,10 +1403,10 @@ async fn test_full_arc_tracking_workflow() {
 
     // ArcHistory
     let resp = server
-        .handle_query(Parameters(QueryRequest::ArcHistory {
+        .handle_query(Parameters(to_query_input(QueryRequest::ArcHistory {
             entity_id: alice_id.clone(),
             limit: None,
-        }))
+        })))
         .await
         .expect("ArcHistory should succeed");
     assert_eq!(
@@ -1411,21 +1417,21 @@ async fn test_full_arc_tracking_workflow() {
 
     // ArcComparison
     let resp = server
-        .handle_query(Parameters(QueryRequest::ArcComparison {
+        .handle_query(Parameters(to_query_input(QueryRequest::ArcComparison {
             entity_id_a: alice_id.clone(),
             entity_id_b: bob_id.clone(),
             window: None,
-        }))
+        })))
         .await
         .expect("ArcComparison should succeed");
     assert_eq!(resp.results.len(), 1);
 
     // ArcDrift
     let resp = server
-        .handle_query(Parameters(QueryRequest::ArcDrift {
+        .handle_query(Parameters(to_query_input(QueryRequest::ArcDrift {
             entity_type: Some("character".to_string()),
             limit: None,
-        }))
+        })))
         .await
         .expect("ArcDrift should succeed");
     assert!(
@@ -1435,10 +1441,10 @@ async fn test_full_arc_tracking_workflow() {
 
     // ArcMoment
     let resp = server
-        .handle_query(Parameters(QueryRequest::ArcMoment {
+        .handle_query(Parameters(to_query_input(QueryRequest::ArcMoment {
             entity_id: alice_id.clone(),
             event_id: None,
-        }))
+        })))
         .await
         .expect("ArcMoment should succeed");
     assert_eq!(resp.results.len(), 1);

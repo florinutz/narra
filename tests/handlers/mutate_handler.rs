@@ -13,8 +13,11 @@ use narra::repository::{EntityRepository, SurrealEntityRepository};
 use pretty_assertions::assert_eq;
 use rmcp::handler::server::wrapper::Parameters;
 
-use crate::common::builders::{CharacterBuilder, EventBuilder, LocationBuilder};
-use crate::common::harness::TestHarness;
+use crate::common::{
+    builders::{CharacterBuilder, EventBuilder, LocationBuilder},
+    harness::TestHarness,
+    to_mutation_input, to_query_input,
+};
 
 // =============================================================================
 // CHARACTER CRUD
@@ -39,7 +42,9 @@ async fn test_create_character_success() {
         description: None,
         profile: None,
     };
-    let response = server.handle_mutate(Parameters(request)).await;
+    let response = server
+        .handle_mutate(Parameters(to_mutation_input(request)))
+        .await;
 
     assert!(response.is_ok(), "Create character should succeed");
     let response = response.unwrap();
@@ -76,7 +81,9 @@ async fn test_create_character_with_aliases() {
         description: None,
         profile: None,
     };
-    let response = server.handle_mutate(Parameters(request)).await;
+    let response = server
+        .handle_mutate(Parameters(to_mutation_input(request)))
+        .await;
 
     assert!(
         response.is_ok(),
@@ -117,7 +124,7 @@ async fn test_delete_character_hard() {
         profile: None,
     };
     let create_response = server
-        .handle_mutate(Parameters(create_request))
+        .handle_mutate(Parameters(to_mutation_input(create_request)))
         .await
         .expect("Create should succeed");
     let char_id = create_response.entity.id.clone();
@@ -127,7 +134,9 @@ async fn test_delete_character_hard() {
         entity_id: char_id.clone(),
         hard: Some(true),
     };
-    let delete_response = server.handle_mutate(Parameters(delete_request)).await;
+    let delete_response = server
+        .handle_mutate(Parameters(to_mutation_input(delete_request)))
+        .await;
 
     assert!(delete_response.is_ok(), "Delete should succeed");
     let delete_response = delete_response.unwrap();
@@ -165,7 +174,9 @@ async fn test_create_location_success() {
         parent_id: None,
         description: Some("A tall stone tower".to_string()),
     };
-    let response = server.handle_mutate(Parameters(request)).await;
+    let response = server
+        .handle_mutate(Parameters(to_mutation_input(request)))
+        .await;
 
     assert!(response.is_ok(), "Create location should succeed");
     let response = response.unwrap();
@@ -191,7 +202,7 @@ async fn test_create_location_with_parent() {
         description: None,
     };
     let parent_response = server
-        .handle_mutate(Parameters(parent_request))
+        .handle_mutate(Parameters(to_mutation_input(parent_request)))
         .await
         .expect("Parent creation should succeed");
     let parent_id = parent_response.entity.id.clone();
@@ -203,7 +214,9 @@ async fn test_create_location_with_parent() {
         parent_id: Some(parent_id.clone()),
         description: None,
     };
-    let child_response = server.handle_mutate(Parameters(child_request)).await;
+    let child_response = server
+        .handle_mutate(Parameters(to_mutation_input(child_request)))
+        .await;
 
     assert!(
         child_response.is_ok(),
@@ -239,7 +252,7 @@ async fn test_delete_location_hard() {
         description: None,
     };
     let create_response = server
-        .handle_mutate(Parameters(create_request))
+        .handle_mutate(Parameters(to_mutation_input(create_request)))
         .await
         .expect("Create should succeed");
     let loc_id = create_response.entity.id.clone();
@@ -249,7 +262,9 @@ async fn test_delete_location_hard() {
         entity_id: loc_id.clone(),
         hard: Some(true),
     };
-    let delete_response = server.handle_mutate(Parameters(delete_request)).await;
+    let delete_response = server
+        .handle_mutate(Parameters(to_mutation_input(delete_request)))
+        .await;
 
     assert!(delete_response.is_ok(), "Delete should succeed");
 
@@ -282,7 +297,9 @@ async fn test_create_event_success() {
         date: None,
         date_precision: None,
     };
-    let response = server.handle_mutate(Parameters(request)).await;
+    let response = server
+        .handle_mutate(Parameters(to_mutation_input(request)))
+        .await;
 
     assert!(response.is_ok(), "Create event should succeed");
     let response = response.unwrap();
@@ -306,7 +323,9 @@ async fn test_create_event_with_date() {
         date: Some("2023-06-15T14:30:00Z".to_string()),
         date_precision: Some("day".to_string()),
     };
-    let response = server.handle_mutate(Parameters(request)).await;
+    let response = server
+        .handle_mutate(Parameters(to_mutation_input(request)))
+        .await;
 
     assert!(response.is_ok(), "Create event with date should succeed");
     let response = response.unwrap();
@@ -339,7 +358,7 @@ async fn test_delete_event_hard() {
         date_precision: None,
     };
     let create_response = server
-        .handle_mutate(Parameters(create_request))
+        .handle_mutate(Parameters(to_mutation_input(create_request)))
         .await
         .expect("Create should succeed");
     let event_id = create_response.entity.id.clone();
@@ -349,7 +368,9 @@ async fn test_delete_event_hard() {
         entity_id: event_id.clone(),
         hard: Some(true),
     };
-    let delete_response = server.handle_mutate(Parameters(delete_request)).await;
+    let delete_response = server
+        .handle_mutate(Parameters(to_mutation_input(delete_request)))
+        .await;
 
     assert!(delete_response.is_ok(), "Delete should succeed");
 
@@ -391,7 +412,9 @@ async fn test_create_scene_success() {
         location_id: location.id.to_string(),
         summary: Some("The story begins".to_string()),
     };
-    let response = server.handle_mutate(Parameters(request)).await;
+    let response = server
+        .handle_mutate(Parameters(to_mutation_input(request)))
+        .await;
 
     assert!(response.is_ok(), "Create scene should succeed");
     let response = response.unwrap();
@@ -424,7 +447,9 @@ async fn test_create_scene_malformed_event_id() {
         location_id: location.id.to_string(),
         summary: None,
     };
-    let response = server.handle_mutate(Parameters(request)).await;
+    let response = server
+        .handle_mutate(Parameters(to_mutation_input(request)))
+        .await;
 
     assert!(
         response.is_err(),
@@ -452,7 +477,9 @@ async fn test_delete_nonexistent_entity() {
         entity_id: "character:nonexistent123".to_string(),
         hard: Some(true),
     };
-    let response = server.handle_mutate(Parameters(request)).await;
+    let response = server
+        .handle_mutate(Parameters(to_mutation_input(request)))
+        .await;
 
     // Note: The current implementation may succeed silently for nonexistent entities
     // or may return an error. This test documents actual behavior.
@@ -480,7 +507,7 @@ async fn test_delete_soft_not_implemented() {
         profile: None,
     };
     let create_response = server
-        .handle_mutate(Parameters(create_request))
+        .handle_mutate(Parameters(to_mutation_input(create_request)))
         .await
         .expect("Create should succeed");
     let char_id = create_response.entity.id.clone();
@@ -490,7 +517,9 @@ async fn test_delete_soft_not_implemented() {
         entity_id: char_id,
         hard: Some(false),
     };
-    let response = server.handle_mutate(Parameters(delete_request)).await;
+    let response = server
+        .handle_mutate(Parameters(to_mutation_input(delete_request)))
+        .await;
 
     assert!(
         response.is_err(),
@@ -524,7 +553,7 @@ async fn test_created_entity_queryable() {
         profile: None,
     };
     let create_response = server
-        .handle_mutate(Parameters(create_request))
+        .handle_mutate(Parameters(to_mutation_input(create_request)))
         .await
         .expect("Create should succeed");
     let char_id = create_response.entity.id.clone();
@@ -534,7 +563,9 @@ async fn test_created_entity_queryable() {
         entity_id: char_id.clone(),
         detail_level: Some(DetailLevel::Standard),
     };
-    let query_response = server.handle_query(Parameters(query_request)).await;
+    let query_response = server
+        .handle_query(Parameters(to_query_input(query_request)))
+        .await;
 
     assert!(query_response.is_ok(), "Query should find created entity");
     let query_response = query_response.unwrap();
@@ -587,7 +618,9 @@ async fn test_batch_create_characters() {
         ],
     };
 
-    let response = server.handle_mutate(Parameters(request)).await;
+    let response = server
+        .handle_mutate(Parameters(to_mutation_input(request)))
+        .await;
     assert!(response.is_ok(), "Batch create should succeed");
     let response = response.unwrap();
 
@@ -630,7 +663,7 @@ async fn test_batch_create_characters_with_ids() {
     };
 
     let response = server
-        .handle_mutate(Parameters(request))
+        .handle_mutate(Parameters(to_mutation_input(request)))
         .await
         .expect("Batch create with IDs should succeed");
 
@@ -664,7 +697,7 @@ async fn test_create_character_with_id() {
         profile: None,
     };
     let response = server
-        .handle_mutate(Parameters(request))
+        .handle_mutate(Parameters(to_mutation_input(request)))
         .await
         .expect("Create with ID should succeed");
 
@@ -698,7 +731,7 @@ async fn test_batch_create_locations() {
     };
 
     let response = server
-        .handle_mutate(Parameters(request))
+        .handle_mutate(Parameters(to_mutation_input(request)))
         .await
         .expect("Batch create locations should succeed");
 
@@ -736,7 +769,7 @@ async fn test_batch_create_events() {
     };
 
     let response = server
-        .handle_mutate(Parameters(request))
+        .handle_mutate(Parameters(to_mutation_input(request)))
         .await
         .expect("Batch create events should succeed");
 
@@ -784,7 +817,7 @@ async fn test_batch_create_relationships() {
     };
 
     let response = server
-        .handle_mutate(Parameters(request))
+        .handle_mutate(Parameters(to_mutation_input(request)))
         .await
         .expect("Batch create relationships should succeed");
 
@@ -823,7 +856,7 @@ async fn test_batch_mixed_ids() {
     };
 
     let response = server
-        .handle_mutate(Parameters(request))
+        .handle_mutate(Parameters(to_mutation_input(request)))
         .await
         .expect("Batch with mixed IDs should succeed");
 

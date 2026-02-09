@@ -14,7 +14,7 @@ mod common;
 
 use std::sync::Arc;
 
-use common::harness::TestHarness;
+use common::{harness::TestHarness, to_mutation_input, to_query_input};
 use narra::embedding::composite::relationship_composite;
 use narra::embedding::NoopEmbeddingService;
 use narra::mcp::{MutationRequest, NarraServer, QueryRequest};
@@ -276,13 +276,15 @@ async fn test_create_relationship_marks_character_embeddings_stale() {
 
     // Create relationship
     let result = server
-        .handle_mutate(Parameters(MutationRequest::CreateRelationship {
-            from_character_id: "alice".to_string(),
-            to_character_id: "bob".to_string(),
-            rel_type: "ally".to_string(),
-            subtype: None,
-            label: None,
-        }))
+        .handle_mutate(Parameters(to_mutation_input(
+            MutationRequest::CreateRelationship {
+                from_character_id: "alice".to_string(),
+                to_character_id: "bob".to_string(),
+                rel_type: "ally".to_string(),
+                subtype: None,
+                label: None,
+            },
+        )))
         .await;
 
     assert!(
@@ -363,10 +365,10 @@ async fn test_character_name_change_marks_relates_to_stale() {
 
     // Update character name
     let result = server
-        .handle_mutate(Parameters(MutationRequest::Update {
+        .handle_mutate(Parameters(to_mutation_input(MutationRequest::Update {
             entity_id: "character:alice".to_string(),
             fields: serde_json::json!({"name": "Alice the Great"}),
-        }))
+        })))
         .await;
 
     assert!(result.is_ok(), "Update should succeed");
@@ -393,7 +395,7 @@ async fn test_embedding_health_empty_world() {
     let server = create_test_server(&harness).await;
 
     let result = server
-        .handle_query(Parameters(QueryRequest::EmbeddingHealth))
+        .handle_query(Parameters(to_query_input(QueryRequest::EmbeddingHealth)))
         .await;
     assert!(
         result.is_ok(),
@@ -454,7 +456,7 @@ async fn test_embedding_health_with_data() {
         .unwrap();
 
     let result = server
-        .handle_query(Parameters(QueryRequest::EmbeddingHealth))
+        .handle_query(Parameters(to_query_input(QueryRequest::EmbeddingHealth)))
         .await
         .unwrap();
 
@@ -506,13 +508,15 @@ async fn test_similar_relationships_no_edge() {
         .unwrap();
 
     let result = server
-        .handle_query(Parameters(QueryRequest::SimilarRelationships {
-            observer_id: "alice".to_string(),
-            target_id: "bob".to_string(),
-            edge_type: None,
-            bias: None,
-            limit: Some(10),
-        }))
+        .handle_query(Parameters(to_query_input(
+            QueryRequest::SimilarRelationships {
+                observer_id: "alice".to_string(),
+                target_id: "bob".to_string(),
+                edge_type: None,
+                bias: None,
+                limit: Some(10),
+            },
+        )))
         .await;
 
     // Should return an error because embedding service is noop
@@ -587,13 +591,15 @@ async fn test_similar_relationships_finds_matches() {
     // checks is_available(). This test verifies the query structure is correct.
     // Full functionality requires real embeddings, tested in cross_engine_queries tests.
     let result = server
-        .handle_query(Parameters(QueryRequest::SimilarRelationships {
-            observer_id: "alice".to_string(),
-            target_id: "bob".to_string(),
-            edge_type: Some("perceives".to_string()),
-            bias: None,
-            limit: Some(5),
-        }))
+        .handle_query(Parameters(to_query_input(
+            QueryRequest::SimilarRelationships {
+                observer_id: "alice".to_string(),
+                target_id: "bob".to_string(),
+                edge_type: Some("perceives".to_string()),
+                bias: None,
+                limit: Some(5),
+            },
+        )))
         .await;
 
     // Should fail because noop embedding service
@@ -611,12 +617,12 @@ async fn test_semantic_search_with_filter_rejects_noop() {
     let server = create_test_server(&harness).await;
 
     let result = server
-        .handle_query(Parameters(QueryRequest::SemanticSearch {
+        .handle_query(Parameters(to_query_input(QueryRequest::SemanticSearch {
             query: "betrayal".to_string(),
             entity_types: Some(vec!["character".to_string()]),
             limit: Some(10),
             filter: Some(serde_json::json!({"roles": "antagonist"})),
-        }))
+        })))
         .await;
 
     // Should fail because noop embedding service
@@ -637,12 +643,12 @@ async fn test_hybrid_search_with_filter_graceful_fallback() {
         .unwrap();
 
     let result = server
-        .handle_query(Parameters(QueryRequest::HybridSearch {
+        .handle_query(Parameters(to_query_input(QueryRequest::HybridSearch {
             query: "Alice".to_string(),
             entity_types: Some(vec!["character".to_string()]),
             limit: Some(10),
             filter: Some(serde_json::json!({"roles": "warrior"})),
-        }))
+        })))
         .await;
 
     // HybridSearch should fall back to keyword search when embeddings unavailable
@@ -667,12 +673,12 @@ async fn test_filter_unknown_fields_ignored() {
 
     // Filter with unknown field should not crash
     let result = server
-        .handle_query(Parameters(QueryRequest::HybridSearch {
+        .handle_query(Parameters(to_query_input(QueryRequest::HybridSearch {
             query: "Alice".to_string(),
             entity_types: Some(vec!["character".to_string()]),
             limit: Some(10),
             filter: Some(serde_json::json!({"nonexistent_field": "value", "also_unknown": 42})),
-        }))
+        })))
         .await;
 
     assert!(

@@ -12,8 +12,11 @@ use narra::repository::{
 };
 use rmcp::handler::server::wrapper::Parameters;
 
-use crate::common::builders::{CharacterBuilder, EventBuilder, KnowledgeBuilder};
-use crate::common::harness::TestHarness;
+use crate::common::{
+    builders::{CharacterBuilder, EventBuilder, KnowledgeBuilder},
+    harness::TestHarness,
+    to_mutation_input, to_query_input,
+};
 
 // =============================================================================
 // INVESTIGATE CONTRADICTIONS TESTS
@@ -38,7 +41,7 @@ async fn test_investigate_contradictions_clean() {
     };
 
     let response = server
-        .handle_query(Parameters(request))
+        .handle_query(Parameters(to_query_input(request)))
         .await
         .expect("InvestigateContradictions should succeed");
 
@@ -70,7 +73,7 @@ async fn test_investigate_contradictions_depth_1() {
     };
 
     let response = server
-        .handle_query(Parameters(request))
+        .handle_query(Parameters(to_query_input(request)))
         .await
         .expect("Should succeed with depth 1");
 
@@ -130,7 +133,7 @@ async fn test_list_facts_category_filter() {
     };
 
     let response = server
-        .handle_query(Parameters(request))
+        .handle_query(Parameters(to_query_input(request)))
         .await
         .expect("ListFacts with category should succeed");
 
@@ -192,7 +195,7 @@ async fn test_list_facts_enforcement_filter() {
     };
 
     let response = server
-        .handle_query(Parameters(request))
+        .handle_query(Parameters(to_query_input(request)))
         .await
         .expect("ListFacts with enforcement should succeed");
 
@@ -242,7 +245,7 @@ async fn test_list_facts_unfiltered() {
     };
 
     let response = server
-        .handle_query(Parameters(request))
+        .handle_query(Parameters(to_query_input(request)))
         .await
         .expect("ListFacts unfiltered should succeed");
 
@@ -262,7 +265,7 @@ async fn test_baseline_arc_snapshots_empty() {
     let request = MutationRequest::BaselineArcSnapshots { entity_type: None };
 
     let response = server
-        .handle_mutate(Parameters(request))
+        .handle_mutate(Parameters(to_mutation_input(request)))
         .await
         .expect("BaselineArcSnapshots should succeed on empty world");
 
@@ -285,7 +288,7 @@ async fn test_baseline_arc_snapshots_filtered() {
     };
 
     let response = server
-        .handle_mutate(Parameters(request))
+        .handle_mutate(Parameters(to_mutation_input(request)))
         .await
         .expect("BaselineArcSnapshots with type filter should succeed");
 
@@ -302,7 +305,9 @@ async fn test_baseline_arc_snapshots_invalid_type() {
         entity_type: Some("invalid_type".to_string()),
     };
 
-    let response = server.handle_mutate(Parameters(request)).await;
+    let response = server
+        .handle_mutate(Parameters(to_mutation_input(request)))
+        .await;
 
     assert!(response.is_err(), "Should reject invalid entity type");
 }
@@ -354,7 +359,7 @@ async fn test_temporal_all_knowledge() {
     };
 
     let response = server
-        .handle_query(Parameters(request))
+        .handle_query(Parameters(to_query_input(request)))
         .await
         .expect("Temporal query should succeed");
 
@@ -412,7 +417,7 @@ async fn test_temporal_at_event() {
     };
 
     let response = server
-        .handle_query(Parameters(request))
+        .handle_query(Parameters(to_query_input(request)))
         .await
         .expect("Temporal query at event should succeed");
 
@@ -442,7 +447,7 @@ async fn test_temporal_no_knowledge() {
     };
 
     let response = server
-        .handle_query(Parameters(request))
+        .handle_query(Parameters(to_query_input(request)))
         .await
         .expect("Temporal query should succeed even with no knowledge");
 
