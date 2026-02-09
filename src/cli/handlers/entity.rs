@@ -5,24 +5,40 @@ use anyhow::Result;
 use crate::cli::output::{
     output_json, output_json_list, print_error, print_hint, print_success, print_table, OutputMode,
 };
-use crate::cli::resolve::{bare_key, entity_type_from_id, resolve_by_name};
+use crate::cli::resolve::{bare_key, entity_type_from_id, resolve_by_name, ResolutionMethod};
 use crate::init::AppContext;
 use crate::models::{CharacterCreate, EventCreate, LocationCreate, SceneCreate};
 use crate::repository::EntityRepository;
+use crate::services::SearchFilter;
 
 // =============================================================================
 // Unified Get — resolve by name or type:id
 // =============================================================================
 
-pub async fn handle_get(ctx: &AppContext, input: &str, mode: OutputMode) -> Result<()> {
+pub async fn handle_get(
+    ctx: &AppContext,
+    input: &str,
+    mode: OutputMode,
+    no_semantic: bool,
+) -> Result<()> {
     if let Some(entity_type) = entity_type_from_id(input) {
         // Explicit type:id
         let key = bare_key(input, entity_type);
-        return dispatch_get(ctx, entity_type, &key, mode).await;
+        dispatch_get(ctx, entity_type, &key, mode).await?;
+        // Show similar entities if semantic available
+        if !no_semantic && ctx.embedding_service.is_available() {
+            show_similar_entities(ctx, input, mode).await;
+        }
+        return Ok(());
     }
 
-    // Try name resolution
-    let matches = resolve_by_name(&ctx.db, input).await?;
+    // Try name resolution with fuzzy/semantic fallback
+    let search_svc = if no_semantic {
+        None
+    } else {
+        Some(ctx.search_service.as_ref())
+    };
+    let matches = resolve_by_name(&ctx.db, input, search_svc).await?;
 
     match matches.len() {
         0 => {
@@ -31,18 +47,120 @@ pub async fn handle_get(ctx: &AppContext, input: &str, mode: OutputMode) -> Resu
         }
         1 => {
             let m = &matches[0];
+            // Indicate resolution method if not exact
+            match &m.method {
+                ResolutionMethod::Fuzzy { score } => {
+                    print_hint(&format!(
+                        "Fuzzy match: '{}' -> {} ({}) [score: {}%]",
+                        input, m.id, m.name, score
+                    ));
+                }
+                ResolutionMethod::Semantic => {
+                    print_hint(&format!(
+                        "Semantic match: '{}' -> {} ({})",
+                        input, m.id, m.name
+                    ));
+                }
+                ResolutionMethod::Exact => {}
+            }
             let key = bare_key(&m.id, &m.entity_type);
             dispatch_get(ctx, &m.entity_type, &key, mode).await?;
+            // Show similar entities
+            if !no_semantic && ctx.embedding_service.is_available() {
+                show_similar_entities(ctx, &m.id, mode).await;
+            }
         }
         _ => {
-            print_error(&format!("Multiple matches for '{}'. Use a full ID:", input));
+            // Check if all non-exact (fuzzy/semantic suggestions)
+            let any_exact = matches.iter().any(|m| m.method == ResolutionMethod::Exact);
+            if any_exact {
+                print_error(&format!("Multiple matches for '{}'. Use a full ID:", input));
+            } else {
+                print_hint(&format!("No exact match for '{}'. Did you mean:", input));
+            }
             for m in &matches {
-                println!("  {} ({})", m.id, m.entity_type);
+                let method_label = match &m.method {
+                    ResolutionMethod::Exact => "".to_string(),
+                    ResolutionMethod::Fuzzy { score } => format!(" [fuzzy: {}%]", score),
+                    ResolutionMethod::Semantic => " [semantic]".to_string(),
+                };
+                println!("  {} ({}){}", m.id, m.name, method_label);
             }
         }
     }
 
     Ok(())
+}
+
+/// Show similar entities for a given entity ID using semantic search.
+async fn show_similar_entities(ctx: &AppContext, entity_id: &str, mode: OutputMode) {
+    if mode == OutputMode::Json {
+        return; // Don't append human text to JSON output
+    }
+
+    // Get entity name to use as search query
+    let entity_type = entity_type_from_id(entity_id).unwrap_or("character");
+    let filter = SearchFilter {
+        limit: Some(6), // Fetch one extra to filter out self
+        ..Default::default()
+    };
+
+    let entity_name = get_entity_display_name(ctx, entity_id).await;
+    let query = entity_name.as_deref().unwrap_or(entity_id);
+
+    if let Ok(results) = ctx.search_service.semantic_search(query, filter).await {
+        let similar: Vec<_> = results
+            .into_iter()
+            .filter(|r| r.id != entity_id && r.entity_type == entity_type)
+            .take(5)
+            .collect();
+        if !similar.is_empty() {
+            println!();
+            crate::cli::output::print_section("Similar Entities", "");
+            let rows: Vec<Vec<String>> = similar
+                .iter()
+                .map(|r| vec![r.id.clone(), format!("{:.4}", r.score), r.name.clone()])
+                .collect();
+            print_table(&["ID", "Score", "Name"], rows);
+        }
+    }
+}
+
+/// Get display name for an entity by looking it up.
+async fn get_entity_display_name(ctx: &AppContext, entity_id: &str) -> Option<String> {
+    let entity_type = entity_type_from_id(entity_id)?;
+    let key = bare_key(entity_id, entity_type);
+    match entity_type {
+        "character" => ctx
+            .entity_repo
+            .get_character(&key)
+            .await
+            .ok()
+            .flatten()
+            .map(|c| c.name),
+        "location" => ctx
+            .entity_repo
+            .get_location(&key)
+            .await
+            .ok()
+            .flatten()
+            .map(|l| l.name),
+        "event" => ctx
+            .entity_repo
+            .get_event(&key)
+            .await
+            .ok()
+            .flatten()
+            .map(|e| e.title),
+        "scene" => ctx
+            .entity_repo
+            .get_scene(&key)
+            .await
+            .ok()
+            .flatten()
+            .map(|s| s.title),
+        _ => None,
+    }
 }
 
 async fn dispatch_get(

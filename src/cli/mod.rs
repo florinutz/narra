@@ -46,6 +46,33 @@ pub enum Commands {
     /// Start MCP server (stdio transport for Claude Code integration)
     Mcp,
 
+    /// Deep entity exploration (relationships, knowledge, perceptions, similar)
+    Explore {
+        /// Entity ID or name
+        entity: String,
+        /// Skip similar entities section
+        #[arg(long)]
+        no_similar: bool,
+        /// Graph traversal depth for related entities
+        #[arg(long, default_value = "2")]
+        depth: usize,
+    },
+
+    /// Ask a natural language question about the narrative world
+    Ask {
+        /// The question to ask
+        question: String,
+        /// Maximum search results
+        #[arg(long, default_value = "10")]
+        limit: usize,
+        /// Include contextual summaries
+        #[arg(long, default_value = "true", action = clap::ArgAction::Set)]
+        context: bool,
+        /// Token budget for context
+        #[arg(long, default_value = "2000")]
+        budget: usize,
+    },
+
     /// Search across all entities (hybrid by default)
     #[command(alias = "search")]
     Find {
@@ -665,7 +692,28 @@ pub async fn execute(
             .await?
         }
 
-        Commands::Get { entity_id } => handlers::entity::handle_get(ctx, entity_id, mode).await?,
+        Commands::Explore {
+            entity,
+            no_similar,
+            depth,
+        } => {
+            handlers::explore::handle_explore(ctx, entity, *no_similar, *depth, mode, no_semantic)
+                .await?
+        }
+
+        Commands::Ask {
+            question,
+            limit,
+            context,
+            budget,
+        } => {
+            handlers::ask::handle_ask(ctx, question, *limit, *context, *budget, mode, no_semantic)
+                .await?
+        }
+
+        Commands::Get { entity_id } => {
+            handlers::entity::handle_get(ctx, entity_id, mode, no_semantic).await?
+        }
 
         Commands::List {
             entity_type,

@@ -1,7 +1,9 @@
 //! CLI command handlers.
 
 pub mod analyze;
+pub mod ask;
 pub mod entity;
+pub mod explore;
 pub mod fact;
 pub mod find;
 pub mod knowledge;

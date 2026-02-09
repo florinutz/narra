@@ -114,6 +114,11 @@ pub fn print_section(title: &str, content: &str) {
     println!("{}", content);
 }
 
+/// Print a horizontal separator line.
+pub fn print_separator(width: usize) {
+    println!("{}", "─".repeat(width).dimmed());
+}
+
 /// Print a dimmed hint/suggestion message.
 pub fn print_hint(msg: &str) {
     println!("{}", msg.dimmed());

@@ -5,6 +5,8 @@ use serde::Deserialize;
 use std::sync::Arc;
 use surrealdb::{engine::local::Db, Surreal};
 
+use crate::services::{SearchFilter, SearchService};
+
 /// Strip a known table prefix from an entity ID, returning the bare key.
 /// e.g. "character:alice" -> "alice", "alice" -> "alice"
 pub fn bare_key(id: &str, prefix: &str) -> String {
@@ -35,12 +37,21 @@ pub fn normalize_entity_id(input: &str, expected_type: Option<&str>) -> String {
     }
 }
 
+/// How an entity was resolved.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResolutionMethod {
+    Exact,
+    Fuzzy { score: u32 },
+    Semantic,
+}
+
 /// A resolved entity with its type and display name.
 #[derive(Debug, Clone)]
 pub struct ResolvedEntity {
     pub entity_type: String,
     pub id: String,
     pub name: String,
+    pub method: ResolutionMethod,
 }
 
 #[derive(Deserialize)]
@@ -49,11 +60,72 @@ struct NameResult {
     name: String,
 }
 
-/// Resolve an input string to entity matches by case-insensitive name/title search.
+/// Resolve an input string to entity matches.
 ///
-/// Searches character (name), location (name), event (title), scene (title).
-/// Returns all matches across all entity tables.
-pub async fn resolve_by_name(db: &Arc<Surreal<Db>>, input: &str) -> Result<Vec<ResolvedEntity>> {
+/// Fallback chain:
+/// 1. Exact case-insensitive name/title match across character, location, event, scene
+/// 2. Fuzzy search (Levenshtein) if exact returns 0 and search_service provided
+/// 3. Semantic search if fuzzy also returns 0 and search_service provided
+pub async fn resolve_by_name(
+    db: &Arc<Surreal<Db>>,
+    input: &str,
+    search_service: Option<&(dyn SearchService + Send + Sync)>,
+) -> Result<Vec<ResolvedEntity>> {
+    // 1. Exact match
+    let resolved = exact_name_match(db, input).await?;
+    if !resolved.is_empty() {
+        return Ok(resolved);
+    }
+
+    // 2. Fuzzy fallback
+    if let Some(search) = search_service {
+        let filter = SearchFilter {
+            limit: Some(5),
+            ..Default::default()
+        };
+        let fuzzy_results = search.fuzzy_search(input, 0.7, filter).await;
+        if let Ok(results) = fuzzy_results {
+            if !results.is_empty() {
+                return Ok(results
+                    .into_iter()
+                    .map(|r| ResolvedEntity {
+                        entity_type: r.entity_type.clone(),
+                        id: r.id,
+                        name: r.name,
+                        method: ResolutionMethod::Fuzzy {
+                            score: (r.score * 100.0) as u32,
+                        },
+                    })
+                    .collect());
+            }
+        }
+
+        // 3. Semantic fallback
+        let filter = SearchFilter {
+            limit: Some(3),
+            ..Default::default()
+        };
+        let semantic_results = search.semantic_search(input, filter).await;
+        if let Ok(results) = semantic_results {
+            if !results.is_empty() {
+                return Ok(results
+                    .into_iter()
+                    .map(|r| ResolvedEntity {
+                        entity_type: r.entity_type.clone(),
+                        id: r.id,
+                        name: r.name,
+                        method: ResolutionMethod::Semantic,
+                    })
+                    .collect());
+            }
+        }
+    }
+
+    Ok(Vec::new())
+}
+
+/// Exact case-insensitive name/title match across all entity tables.
+async fn exact_name_match(db: &Arc<Surreal<Db>>, input: &str) -> Result<Vec<ResolvedEntity>> {
     let input_lower = input.to_lowercase();
 
     let (characters, locations, events, scenes) = tokio::join!(
@@ -102,6 +174,7 @@ pub async fn resolve_by_name(db: &Arc<Surreal<Db>>, input: &str) -> Result<Vec<R
             entity_type: "character".to_string(),
             id: r.id.to_string(),
             name: r.name,
+            method: ResolutionMethod::Exact,
         });
     }
     for r in locations.unwrap_or_default() {
@@ -109,6 +182,7 @@ pub async fn resolve_by_name(db: &Arc<Surreal<Db>>, input: &str) -> Result<Vec<R
             entity_type: "location".to_string(),
             id: r.id.to_string(),
             name: r.name,
+            method: ResolutionMethod::Exact,
         });
     }
     for r in events.unwrap_or_default() {
@@ -116,6 +190,7 @@ pub async fn resolve_by_name(db: &Arc<Surreal<Db>>, input: &str) -> Result<Vec<R
             entity_type: "event".to_string(),
             id: r.id.to_string(),
             name: r.name,
+            method: ResolutionMethod::Exact,
         });
     }
     for r in scenes.unwrap_or_default() {
@@ -123,6 +198,7 @@ pub async fn resolve_by_name(db: &Arc<Surreal<Db>>, input: &str) -> Result<Vec<R
             entity_type: "scene".to_string(),
             id: r.id.to_string(),
             name: r.name,
+            method: ResolutionMethod::Exact,
         });
     }
 
