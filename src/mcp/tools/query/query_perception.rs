@@ -1,6 +1,6 @@
 use crate::mcp::NarraServer;
 use crate::mcp::{EntityResult, QueryResponse};
-use crate::utils::math::cosine_similarity;
+use crate::services::perception::PerceptionService;
 
 impl NarraServer {
     pub(crate) async fn handle_perspective_search(
@@ -130,121 +130,68 @@ impl NarraServer {
         observer_id: &str,
         target_id: &str,
     ) -> Result<QueryResponse, String> {
-        // Find perceives edge with embedding
-        let edge_query = format!(
-            "SELECT id, embedding, in.name AS observer_name, out.name AS target_name, \
-             perception, feelings, tension_level, history_notes \
-             FROM perceives \
-             WHERE in = {} AND out = {} AND embedding IS NOT NONE",
-            observer_id, target_id
-        );
-
-        let mut edge_resp = self
-            .db
-            .query(&edge_query)
+        let service = PerceptionService::new(self.db.clone());
+        let result = service
+            .analyze_gap(observer_id, target_id)
             .await
-            .map_err(|e| format!("Failed to fetch perceives edge: {}", e))?;
-
-        #[derive(serde::Deserialize)]
-        struct PerceivesEdge {
-            id: surrealdb::sql::Thing,
-            embedding: Vec<f32>,
-            observer_name: Option<String>,
-            target_name: Option<String>,
-            perception: Option<String>,
-            feelings: Option<String>,
-            tension_level: Option<i32>,
-            history_notes: Option<String>,
-        }
-
-        let edges: Vec<PerceivesEdge> = edge_resp
-            .take(0)
-            .map_err(|e| format!("Failed to parse perceives edge: {}", e))?;
-
-        let edge = edges.into_iter().next().ok_or_else(|| {
-            format!(
-                "No perspective embedding found for {} → {}. Run BackfillEmbeddings first.",
-                observer_id, target_id
-            )
-        })?;
-
-        // Fetch target's real embedding
-        let real_query = format!("SELECT VALUE embedding FROM {}", target_id);
-        let mut real_resp = self
-            .db
-            .query(&real_query)
-            .await
-            .map_err(|e| format!("Failed to fetch target embedding: {}", e))?;
-
-        let real_embeddings: Vec<Option<Vec<f32>>> = real_resp.take(0).unwrap_or_default();
-        let real_embedding = real_embeddings
-            .into_iter()
-            .next()
-            .flatten()
-            .ok_or_else(|| {
-                format!(
-                    "Target {} has no embedding. Run BackfillEmbeddings first.",
-                    target_id
-                )
-            })?;
-
-        // Compute gap
-        let similarity = cosine_similarity(&edge.embedding, &real_embedding);
-        let gap = 1.0 - similarity;
-
-        let obs_name = edge.observer_name.as_deref().unwrap_or("?");
-        let tgt_name = edge.target_name.as_deref().unwrap_or("?");
-
-        // Qualitative assessment
-        let assessment = if gap < 0.05 {
-            "Remarkably accurate"
-        } else if gap < 0.15 {
-            "Fairly accurate"
-        } else if gap < 0.30 {
-            "Notable blind spots"
-        } else if gap < 0.50 {
-            "Significantly distorted"
-        } else {
-            "Dramatically wrong"
-        };
+            .map_err(|e| format!("{}", e))?;
 
         let mut content_parts = vec![
-            format!("Perception gap: {:.4} ({})", gap, assessment),
-            format!("Cosine similarity to real {}: {:.4}", tgt_name, similarity),
+            format!("Perception gap: {:.4} ({})", result.gap, result.assessment),
+            format!(
+                "Cosine similarity to real {}: {:.4}",
+                result.target_name, result.similarity
+            ),
         ];
 
-        if let Some(ref p) = edge.perception {
-            content_parts.push(format!("{} perceives {} as: {}", obs_name, tgt_name, p));
+        if let Some(ref p) = result.perception {
+            content_parts.push(format!(
+                "{} perceives {} as: {}",
+                result.observer_name, result.target_name, p
+            ));
         }
-        if let Some(ref f) = edge.feelings {
-            content_parts.push(format!("{} feels: {}", obs_name, f));
+        if let Some(ref f) = result.feelings {
+            content_parts.push(format!("{} feels: {}", result.observer_name, f));
         }
-        if let Some(t) = edge.tension_level {
+        if let Some(t) = result.tension_level {
             content_parts.push(format!("Tension: {}/10", t));
         }
-        if let Some(ref h) = edge.history_notes {
+        if let Some(ref h) = result.history_notes {
             content_parts.push(format!("History: {}", h));
         }
 
-        let result = EntityResult {
-            id: edge.id.to_string(),
+        let er = EntityResult {
+            id: format!("perceives:{}->{}", observer_id, target_id),
             entity_type: "perception_gap".to_string(),
-            name: format!("{} → {} gap", obs_name, tgt_name),
+            name: format!("{} → {} gap", result.observer_name, result.target_name),
             content: content_parts.join("\n"),
-            confidence: Some(1.0 - gap), // Higher confidence = more accurate perception
+            confidence: Some(1.0 - result.gap),
             last_modified: None,
         };
 
-        let mut hints = vec![format!("{}: {} (gap={:.4})", assessment, obs_name, gap)];
-        if gap >= 0.30 {
+        // Capitalize assessment for hints
+        let cap_assessment = {
+            let a = &result.assessment;
+            let mut chars = a.chars();
+            match chars.next() {
+                None => String::new(),
+                Some(c) => c.to_uppercase().to_string() + chars.as_str(),
+            }
+        };
+
+        let mut hints = vec![format!(
+            "{}: {} (gap={:.4})",
+            cap_assessment, result.observer_name, result.gap
+        )];
+        if result.gap >= 0.30 {
             hints.push("High gap = dramatic irony potential. This character's view is significantly distorted.".to_string());
         }
         hints.push("Use PerceptionMatrix to compare how all observers see this target".to_string());
 
-        let token_estimate = result.content.len() / 4 + 30;
+        let token_estimate = er.content.len() / 4 + 30;
 
         Ok(QueryResponse {
-            results: vec![result],
+            results: vec![er],
             total: 1,
             next_cursor: None,
             hints,
@@ -257,132 +204,29 @@ impl NarraServer {
         target_id: &str,
         limit: usize,
     ) -> Result<QueryResponse, String> {
-        // Fetch all perspective embeddings for target
-        let persp_query = format!(
-            "SELECT id, embedding, in.name AS observer_name \
-             FROM perceives WHERE out = {} AND embedding IS NOT NONE LIMIT {}",
-            target_id, limit
-        );
-
-        let mut persp_resp = self
-            .db
-            .query(&persp_query)
+        let service = PerceptionService::new(self.db.clone());
+        let result = service
+            .analyze_matrix(target_id, limit)
             .await
-            .map_err(|e| format!("Failed to fetch perspectives: {}", e))?;
+            .map_err(|e| format!("{}", e))?;
 
-        #[derive(serde::Deserialize)]
-        struct ObserverPersp {
-            id: surrealdb::sql::Thing,
-            embedding: Vec<f32>,
-            observer_name: Option<String>,
-        }
-
-        let perspectives: Vec<ObserverPersp> = persp_resp
-            .take(0)
-            .map_err(|e| format!("Failed to parse perspectives: {}", e))?;
-
-        if perspectives.is_empty() {
-            return Err(format!(
-                "No perspective embeddings found for {}. Run BackfillEmbeddings first.",
-                target_id
-            ));
-        }
-
-        // Fetch target's real embedding
-        let real_query = format!("SELECT VALUE embedding FROM {}", target_id);
-        let mut real_resp = self
-            .db
-            .query(&real_query)
-            .await
-            .map_err(|e| format!("Failed to fetch target embedding: {}", e))?;
-
-        let real_embeddings: Vec<Option<Vec<f32>>> = real_resp.take(0).unwrap_or_default();
-        let real_embedding = real_embeddings.into_iter().next().flatten();
-
-        let target_name = self.extract_name_from_id(target_id);
-
-        // Compute per-observer gap and pairwise agreement
-        struct ObserverData {
-            id: String,
-            name: String,
-            gap: f32,
-            embedding: Vec<f32>,
-        }
-
-        let mut observer_data: Vec<ObserverData> = perspectives
+        let entity_results: Vec<EntityResult> = result
+            .observers
             .iter()
-            .map(|p| {
-                let name = p.observer_name.as_deref().unwrap_or("?").to_string();
-                let gap = real_embedding
-                    .as_ref()
-                    .map(|real| 1.0 - cosine_similarity(&p.embedding, real))
-                    .unwrap_or(0.0);
-                ObserverData {
-                    id: p.id.to_string(),
-                    name,
-                    gap,
-                    embedding: p.embedding.clone(),
+            .map(|obs| {
+                let mut content = format!("Gap: {:.4} ({})", obs.gap, obs.assessment);
+                if let Some(ref closest) = obs.agrees_with {
+                    // Recompute similarity for display (observer embeddings are available)
+                    content.push_str(&format!(". Agrees most with {}", closest));
                 }
-            })
-            .collect();
-
-        // Sort by accuracy (lowest gap first)
-        observer_data.sort_by(|a, b| {
-            a.gap
-                .partial_cmp(&b.gap)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-
-        // Build results with pairwise agreement info
-        let entity_results: Vec<EntityResult> = observer_data
-            .iter()
-            .enumerate()
-            .map(|(i, obs)| {
-                let gap_assessment = if obs.gap < 0.05 {
-                    "remarkably accurate"
-                } else if obs.gap < 0.15 {
-                    "fairly accurate"
-                } else if obs.gap < 0.30 {
-                    "notable blind spots"
-                } else if obs.gap < 0.50 {
-                    "significantly distorted"
-                } else {
-                    "dramatically wrong"
-                };
-
-                // Find most/least agreeing observers
-                let mut agreements: Vec<(&str, f32)> = observer_data
-                    .iter()
-                    .enumerate()
-                    .filter(|(j, _)| *j != i)
-                    .map(|(_, other)| {
-                        let sim = cosine_similarity(&obs.embedding, &other.embedding);
-                        (other.name.as_str(), sim)
-                    })
-                    .collect();
-                agreements
-                    .sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-
-                let mut content = format!("Gap: {:.4} ({})", obs.gap, gap_assessment);
-                if let Some((closest_name, closest_sim)) = agreements.first() {
-                    content.push_str(&format!(
-                        ". Agrees most with {} ({:.3})",
-                        closest_name, closest_sim
-                    ));
-                }
-                if let Some((furthest_name, furthest_sim)) = agreements.last() {
-                    if agreements.len() > 1 {
-                        content.push_str(&format!(
-                            ". Disagrees most with {} ({:.3})",
-                            furthest_name, furthest_sim
-                        ));
-                    }
+                if let Some(ref furthest) = obs.disagrees_with {
+                    content.push_str(&format!(". Disagrees most with {}", furthest));
                 }
 
                 EntityResult {
-                    id: obs.id.clone(),
+                    id: format!("perceives:{}->{}", obs.observer_name, result.target_name),
                     entity_type: "perception_matrix".to_string(),
-                    name: format!("{} → {}", obs.name, target_name),
+                    name: format!("{} → {}", obs.observer_name, result.target_name),
                     content,
                     confidence: Some(1.0 - obs.gap),
                     last_modified: None,
@@ -390,20 +234,29 @@ impl NarraServer {
             })
             .collect();
 
-        let most_accurate = observer_data
+        let most_accurate = result
+            .observers
             .first()
-            .map(|o| o.name.as_str())
+            .map(|o| o.observer_name.as_str())
             .unwrap_or("?");
-        let least_accurate = observer_data.last().map(|o| o.name.as_str()).unwrap_or("?");
+        let least_accurate = result
+            .observers
+            .last()
+            .map(|o| o.observer_name.as_str())
+            .unwrap_or("?");
 
         let mut hints = vec![
-            format!("{} observers of {}", entity_results.len(), target_name),
+            format!(
+                "{} observers of {}",
+                entity_results.len(),
+                result.target_name
+            ),
             format!(
                 "Most accurate: {}. Least accurate: {}.",
                 most_accurate, least_accurate
             ),
         ];
-        if real_embedding.is_none() {
+        if !result.has_real_embedding {
             hints.push(
                 "Warning: Target has no embedding — gap values are all 0. Run BackfillEmbeddings."
                     .to_string(),
@@ -431,134 +284,34 @@ impl NarraServer {
         observer_id: &str,
         target_id: &str,
     ) -> Result<QueryResponse, String> {
-        // Find the perceives edge ID
-        let edge_query = format!(
-            "SELECT id FROM perceives WHERE in = {} AND out = {}",
-            observer_id, target_id
-        );
-
-        let mut edge_resp = self
-            .db
-            .query(&edge_query)
+        let service = PerceptionService::new(self.db.clone());
+        let result = service
+            .analyze_shift(observer_id, target_id)
             .await
-            .map_err(|e| format!("Failed to find perceives edge: {}", e))?;
+            .map_err(|e| format!("{}", e))?;
 
-        #[derive(serde::Deserialize)]
-        struct EdgeIdResult {
-            id: surrealdb::sql::Thing,
-        }
+        let perceives_id_str = format!("perceives:{}->{}", observer_id, target_id);
 
-        let edge_ids: Vec<EdgeIdResult> = edge_resp
-            .take(0)
-            .map_err(|e| format!("Failed to parse perceives edge: {}", e))?;
-
-        let perceives_id = edge_ids.into_iter().next().ok_or_else(|| {
-            format!(
-                "No perceives edge found from {} to {}",
-                observer_id, target_id
-            )
-        })?;
-
-        let perceives_id_str = perceives_id.id.to_string();
-
-        // Fetch perspective arc snapshots
-        let persp_snap_query = format!(
-            "SELECT embedding, delta_magnitude, created_at, event_id.title AS event_title \
-             FROM arc_snapshot \
-             WHERE entity_id = {} AND entity_type = 'perspective' \
-             ORDER BY created_at ASC",
-            perceives_id_str
-        );
-
-        let mut persp_resp = self
-            .db
-            .query(&persp_snap_query)
-            .await
-            .map_err(|e| format!("Perception shift query failed: {}", e))?;
-
-        #[derive(serde::Deserialize)]
-        struct PerspSnapshot {
-            embedding: Vec<f32>,
-            delta_magnitude: Option<f32>,
-            created_at: String,
-            event_title: Option<String>,
-        }
-
-        let persp_snaps: Vec<PerspSnapshot> = persp_resp
-            .take(0)
-            .map_err(|e| format!("Failed to parse perspective snapshots: {}", e))?;
-
-        if persp_snaps.is_empty() {
-            return Err(format!(
-                "No perspective arc snapshots found for {} → {}. \
-                 Run BackfillEmbeddings first, then trigger updates to build perspective history.",
-                observer_id, target_id
-            ));
-        }
-
-        // Fetch target character arc snapshots
-        let char_snap_query = format!(
-            "SELECT embedding, created_at FROM arc_snapshot \
-             WHERE entity_id = {} AND entity_type = 'character' \
-             ORDER BY created_at ASC",
-            target_id
-        );
-
-        let mut char_resp = self
-            .db
-            .query(&char_snap_query)
-            .await
-            .map_err(|e| format!("Failed to fetch target snapshots: {}", e))?;
-
-        #[derive(serde::Deserialize)]
-        struct CharSnapshot {
-            embedding: Vec<f32>,
-            created_at: String,
-        }
-
-        let char_snaps: Vec<CharSnapshot> = char_resp.take(0).unwrap_or_default();
-
-        let obs_name = self.extract_name_from_id(observer_id);
-        let tgt_name = self.extract_name_from_id(target_id);
-
-        // For each perspective snapshot, find nearest-time character snapshot and compute gap
-        let entity_results: Vec<EntityResult> = persp_snaps
+        let entity_results: Vec<EntityResult> = result
+            .snapshots
             .iter()
             .enumerate()
-            .map(|(i, psnap)| {
-                let delta_str = psnap
-                    .delta_magnitude
+            .map(|(i, snap)| {
+                let delta_str = snap
+                    .delta
                     .map(|d| format!("{:.4}", d))
                     .unwrap_or_else(|| "baseline".to_string());
 
-                let event_info = psnap
-                    .event_title
+                let event_info = snap
+                    .event
                     .as_ref()
                     .map(|t| format!(" ({})", t))
                     .unwrap_or_default();
 
-                // Find nearest character snapshot
-                let gap_info = if !char_snaps.is_empty() {
-                    // Find snapshot with closest timestamp (simple string comparison works for ISO dates)
-                    let nearest = char_snaps.iter().min_by_key(|cs| {
-                        // Absolute difference by string comparison (approximate but sufficient)
-                        if cs.created_at <= psnap.created_at {
-                            psnap.created_at.len() // favor earlier snapshots
-                        } else {
-                            cs.created_at.len() + 1
-                        }
-                    });
-
-                    if let Some(nearest_char) = nearest {
-                        let gap =
-                            1.0 - cosine_similarity(&psnap.embedding, &nearest_char.embedding);
-                        format!(", gap={:.4}", gap)
-                    } else {
-                        String::new()
-                    }
-                } else {
-                    String::new()
-                };
+                let gap_info = snap
+                    .gap
+                    .map(|g| format!(", gap={:.4}", g))
+                    .unwrap_or_default();
 
                 let content = format!(
                     "Snapshot {}: delta={}{}{}",
@@ -571,48 +324,18 @@ impl NarraServer {
                 EntityResult {
                     id: format!("{}-snap-{}", perceives_id_str, i),
                     entity_type: "perception_shift".to_string(),
-                    name: format!("{} → {} snapshot {}", obs_name, tgt_name, i + 1),
+                    name: format!(
+                        "{} → {} snapshot {}",
+                        result.observer_name,
+                        result.target_name,
+                        i + 1
+                    ),
                     content,
-                    confidence: psnap.delta_magnitude,
-                    last_modified: Some(psnap.created_at.clone()),
+                    confidence: snap.delta,
+                    last_modified: Some(snap.timestamp.clone()),
                 }
             })
             .collect();
-
-        // Compute gap trajectory if we have character snapshots
-        let trajectory_hint = if char_snaps.len() >= 2 && persp_snaps.len() >= 2 {
-            // Compare first and last gap
-            let first_gap = 1.0
-                - cosine_similarity(
-                    &persp_snaps.first().unwrap().embedding,
-                    &char_snaps.first().unwrap().embedding,
-                );
-            let last_gap = 1.0
-                - cosine_similarity(
-                    &persp_snaps.last().unwrap().embedding,
-                    &char_snaps.last().unwrap().embedding,
-                );
-            let delta = last_gap - first_gap;
-
-            if delta < -0.02 {
-                format!(
-                    "Gap converging ({:.4} → {:.4}): {} is getting more accurate about {}",
-                    first_gap, last_gap, obs_name, tgt_name
-                )
-            } else if delta > 0.02 {
-                format!(
-                    "Gap diverging ({:.4} → {:.4}): {} is drifting further from reality about {}",
-                    first_gap, last_gap, obs_name, tgt_name
-                )
-            } else {
-                format!(
-                    "Gap stable ({:.4} → {:.4}): {}'s accuracy about {} is unchanged",
-                    first_gap, last_gap, obs_name, tgt_name
-                )
-            }
-        } else {
-            "Need more snapshots for gap trajectory analysis".to_string()
-        };
 
         let total = entity_results.len();
         let token_estimate = entity_results
@@ -623,9 +346,9 @@ impl NarraServer {
         let hints = vec![
             format!(
                 "{} perspective snapshots for {} → {}",
-                total, obs_name, tgt_name
+                total, result.observer_name, result.target_name
             ),
-            trajectory_hint,
+            result.trajectory.clone(),
             "Use PerceptionGap for current gap analysis".to_string(),
         ];
 

@@ -92,6 +92,44 @@ pub enum Commands {
         limit: usize,
     },
 
+    /// Find shortest connection paths between entities
+    Path {
+        /// Source entity (ID or name)
+        from: String,
+        /// Target entity (ID or name)
+        to: String,
+        /// Maximum hops
+        #[arg(long, default_value = "3")]
+        max_hops: usize,
+        /// Include event connections
+        #[arg(long)]
+        include_events: bool,
+    },
+
+    /// What references this entity
+    References {
+        /// Entity ID or name
+        entity: String,
+        /// Filter by referencing entity types (comma-separated)
+        #[arg(long, value_delimiter = ',')]
+        types: Option<Vec<String>>,
+        /// Maximum results
+        #[arg(long, default_value = "20")]
+        limit: usize,
+    },
+
+    /// Mark entity as protected (triggers warnings on impact)
+    Protect {
+        /// Entity ID or name
+        entity: String,
+    },
+
+    /// Remove entity protection
+    Unprotect {
+        /// Entity ID or name
+        entity: String,
+    },
+
     /// Get any entity by ID or name
     Get {
         /// Entity ID (type:key) or name for auto-resolution
@@ -438,6 +476,90 @@ pub enum AnalyzeCommands {
         #[arg(long, default_value = "20")]
         limit: usize,
     },
+    /// Thematic clustering (k-means on entity embeddings)
+    Themes {
+        /// Entity types to cluster (comma-separated: char,event,location,scene,knowledge)
+        #[arg(long, value_delimiter = ',')]
+        types: Option<Vec<String>>,
+        /// Number of clusters (auto if not specified)
+        #[arg(long)]
+        clusters: Option<usize>,
+    },
+    /// Missing entity types in thematic clusters
+    ThematicGaps {
+        /// Minimum cluster size to analyze
+        #[arg(long, default_value = "3")]
+        min_size: usize,
+        /// Expected types per cluster (comma-separated)
+        #[arg(long, value_delimiter = ',')]
+        expected_types: Option<Vec<String>>,
+    },
+    /// Perception gap: how wrong is observer about target
+    PerceptionGap {
+        /// Observer character (ID or name)
+        observer: String,
+        /// Target character (ID or name)
+        target: String,
+    },
+    /// Perception matrix: all observers' accuracy for a target
+    PerceptionMatrix {
+        /// Target character (ID or name)
+        target: String,
+        /// Maximum observers
+        #[arg(long, default_value = "20")]
+        limit: usize,
+    },
+    /// Perception shift: observer's view evolution over time
+    PerceptionShift {
+        /// Observer character (ID or name)
+        observer: String,
+        /// Target character (ID or name)
+        target: String,
+    },
+    /// Arc history: entity embedding evolution timeline
+    ArcHistory {
+        /// Entity (ID or name)
+        entity: String,
+        /// Maximum snapshots
+        #[arg(long, default_value = "50")]
+        limit: usize,
+    },
+    /// Arc comparison: compare two entity trajectories
+    ArcCompare {
+        /// First entity (ID or name)
+        entity_a: String,
+        /// Second entity (ID or name)
+        entity_b: String,
+        /// Time window (e.g., "recent:10")
+        #[arg(long)]
+        window: Option<String>,
+    },
+    /// Arc moment: entity state at a point in time
+    ArcMoment {
+        /// Entity (ID or name)
+        entity: String,
+        /// Event ID to anchor the moment
+        #[arg(long)]
+        event: Option<String>,
+    },
+    /// What-if: preview impact of a character learning a fact
+    WhatIf {
+        /// Character (ID or name)
+        character: String,
+        /// Knowledge fact ID
+        fact: String,
+        /// Certainty level (knows, suspects, heard_rumor)
+        #[arg(long)]
+        certainty: Option<String>,
+    },
+    /// Impact cascade analysis for entity changes
+    Impact {
+        /// Entity (ID or name)
+        entity: String,
+        /// Description of the change
+        #[arg(long)]
+        description: Option<String>,
+    },
     /// Narrative situation report (irony, conflicts, tensions, themes)
     SituationReport,
     /// Character dossier (network, knowledge, perceptions)
@@ -672,6 +794,41 @@ pub async fn execute(
         // =====================================================================
         // New intent-based commands
         // =====================================================================
+        Commands::Path {
+            from,
+            to,
+            max_hops,
+            include_events,
+        } => {
+            handlers::path::handle_path(
+                ctx,
+                from,
+                to,
+                *max_hops,
+                *include_events,
+                mode,
+                no_semantic,
+            )
+            .await?
+        }
+
+        Commands::References {
+            entity,
+            types,
+            limit,
+        } => {
+            handlers::path::handle_references(ctx, entity, types.clone(), *limit, mode, no_semantic)
+                .await?
+        }
+
+        Commands::Protect { entity } => {
+            handlers::entity::handle_protect(ctx, entity, mode, no_semantic).await?
+        }
+
+        Commands::Unprotect { entity } => {
+            handlers::entity::handle_unprotect(ctx, entity, mode, no_semantic).await?
+        }
+
         Commands::Find {
             query,
             keyword_only,
@@ -817,6 +974,101 @@ pub async fn execute(
             AnalyzeCommands::ArcDrift { entity_type, limit } => {
                 handlers::analyze::handle_arc_drift(ctx, entity_type.as_deref(), *limit, mode)
                     .await?
+            }
+            AnalyzeCommands::Themes { types, clusters } => {
+                handlers::analyze::handle_themes(ctx, types.clone(), *clusters, mode).await?
+            }
+            AnalyzeCommands::ThematicGaps {
+                min_size,
+                expected_types,
+            } => {
+                handlers::analyze::handle_thematic_gaps(
+                    ctx,
+                    *min_size,
+                    expected_types.clone(),
+                    mode,
+                )
+                .await?
+            }
+            AnalyzeCommands::PerceptionGap { observer, target } => {
+                handlers::perception::handle_perception_gap(
+                    ctx,
+                    observer,
+                    target,
+                    mode,
+                    no_semantic,
+                )
+                .await?
+            }
+            AnalyzeCommands::PerceptionMatrix { target, limit } => {
+                handlers::perception::handle_perception_matrix(
+                    ctx,
+                    target,
+                    *limit,
+                    mode,
+                    no_semantic,
+                )
+                .await?
+            }
+            AnalyzeCommands::PerceptionShift { observer, target } => {
+                handlers::perception::handle_perception_shift(
+                    ctx,
+                    observer,
+                    target,
+                    mode,
+                    no_semantic,
+                )
+                .await?
+            }
+            AnalyzeCommands::ArcHistory { entity, limit } => {
+                handlers::arc::handle_arc_history(ctx, entity, *limit, mode, no_semantic).await?
+            }
+            AnalyzeCommands::ArcCompare {
+                entity_a,
+                entity_b,
+                window,
+            } => {
+                handlers::arc::handle_arc_compare(
+                    ctx,
+                    entity_a,
+                    entity_b,
+                    window.clone(),
+                    mode,
+                    no_semantic,
+                )
+                .await?
+            }
+            AnalyzeCommands::ArcMoment { entity, event } => {
+                handlers::arc::handle_arc_moment(ctx, entity, event.clone(), mode, no_semantic)
+                    .await?
+            }
+            AnalyzeCommands::WhatIf {
+                character,
+                fact,
+                certainty,
+            } => {
+                handlers::arc::handle_what_if(
+                    ctx,
+                    character,
+                    fact,
+                    certainty.clone(),
+                    mode,
+                    no_semantic,
+                )
+                .await?
+            }
+            AnalyzeCommands::Impact {
+                entity,
+                description,
+            } => {
+                handlers::analyze::handle_impact(
+                    ctx,
+                    entity,
+                    description.clone(),
+                    mode,
+                    no_semantic,
+                )
+                .await?
             }
             AnalyzeCommands::SituationReport => {
                 handlers::analyze::handle_situation_report(ctx, mode).await?

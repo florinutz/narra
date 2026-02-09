@@ -1,6 +1,7 @@
 use crate::mcp::NarraServer;
 use crate::mcp::{EntityResult, QueryResponse};
-use crate::utils::math::{cosine_similarity, vector_subtract};
+use crate::services::arc::ArcService;
+use crate::utils::math::cosine_similarity;
 
 impl NarraServer {
     pub(crate) async fn handle_arc_history(
@@ -8,34 +9,13 @@ impl NarraServer {
         entity_id: &str,
         limit: usize,
     ) -> Result<QueryResponse, String> {
-        // Fetch snapshots ordered by time ascending
-        let query_str = format!(
-            "SELECT *, event_id.title AS event_title FROM arc_snapshot \
-             WHERE entity_id = {} ORDER BY created_at ASC LIMIT {}",
-            entity_id, limit
-        );
-
-        let mut response = self
-            .db
-            .query(&query_str)
+        let service = ArcService::new(self.db.clone());
+        let result = service
+            .analyze_history(entity_id, limit)
             .await
-            .map_err(|e| format!("Arc history query failed: {}", e))?;
+            .map_err(|e| format!("{}", e))?;
 
-        #[derive(serde::Deserialize)]
-        struct ArcSnapshot {
-            id: surrealdb::sql::Thing,
-            entity_type: String,
-            delta_magnitude: Option<f32>,
-            event_title: Option<String>,
-            created_at: String,
-            embedding: Vec<f32>,
-        }
-
-        let snapshots: Vec<ArcSnapshot> = response
-            .take(0)
-            .map_err(|e| format!("Failed to parse arc snapshots: {}", e))?;
-
-        if snapshots.is_empty() {
+        if result.total_snapshots == 0 {
             return Ok(QueryResponse {
                 results: vec![],
                 total: 0,
@@ -48,31 +28,21 @@ impl NarraServer {
             });
         }
 
-        // Compute cumulative drift and net displacement
-        let mut cumulative_drift = 0.0f32;
-        let first_embedding = &snapshots[0].embedding;
-        let last_embedding = &snapshots[snapshots.len() - 1].embedding;
-        let net_displacement = 1.0 - cosine_similarity(first_embedding, last_embedding);
-
         let entity_name = self.extract_name_from_id(entity_id);
-        let total_snapshots = snapshots.len();
 
-        let entity_results: Vec<EntityResult> = snapshots
+        let entity_results: Vec<EntityResult> = result
+            .snapshots
             .iter()
             .enumerate()
             .map(|(i, snap)| {
-                if let Some(delta) = snap.delta_magnitude {
-                    cumulative_drift += delta;
-                }
-
                 let event_info = snap
-                    .event_title
+                    .event
                     .as_ref()
                     .map(|t| format!(" (during: {})", t))
                     .unwrap_or_default();
 
                 let delta_str = snap
-                    .delta_magnitude
+                    .delta
                     .map(|d| format!("{:.4}", d))
                     .unwrap_or_else(|| "baseline".to_string());
 
@@ -80,36 +50,28 @@ impl NarraServer {
                     "Snapshot {}: delta={}, cumulative={:.4}{}",
                     i + 1,
                     delta_str,
-                    cumulative_drift,
+                    snap.cumulative,
                     event_info
                 );
 
                 EntityResult {
-                    id: snap.id.to_string(),
-                    entity_type: snap.entity_type.clone(),
+                    id: format!("arc_snapshot:{}:{}", entity_id, i),
+                    entity_type: "arc_snapshot".to_string(),
                     name: format!("{} snapshot {}", entity_name, i + 1),
                     content,
-                    confidence: snap.delta_magnitude,
-                    last_modified: Some(snap.created_at.clone()),
+                    confidence: snap.delta,
+                    last_modified: Some(snap.timestamp.clone()),
                 }
             })
             .collect();
 
-        // Qualitative assessment
-        let assessment = if net_displacement < 0.02 {
-            "essentially unchanged"
-        } else if net_displacement < 0.1 {
-            "minor evolution"
-        } else if net_displacement < 0.3 {
-            "significant evolution"
-        } else {
-            "dramatic transformation"
-        };
-
         let hints = vec![
-            format!("{} snapshots for {}", total_snapshots, entity_id),
-            format!("Net displacement: {:.4} ({})", net_displacement, assessment),
-            format!("Cumulative drift: {:.4}", cumulative_drift),
+            format!("{} snapshots for {}", result.total_snapshots, entity_id),
+            format!(
+                "Net displacement: {:.4} ({})",
+                result.net_displacement, result.assessment
+            ),
+            format!("Cumulative drift: {:.4}", result.cumulative_drift),
             "Use ArcComparison to compare trajectories with another entity".to_string(),
         ];
 
@@ -120,7 +82,7 @@ impl NarraServer {
 
         Ok(QueryResponse {
             results: entity_results,
-            total: total_snapshots,
+            total: result.total_snapshots,
             next_cursor: None,
             hints,
             token_estimate,
@@ -133,107 +95,21 @@ impl NarraServer {
         entity_id_b: &str,
         window: Option<String>,
     ) -> Result<QueryResponse, String> {
-        // Parse window parameter
-        let limit_clause = if let Some(ref w) = window {
-            if let Some(n_str) = w.strip_prefix("recent:") {
-                let n: usize = n_str
-                    .parse()
-                    .map_err(|_| format!("Invalid window format: '{}'. Use 'recent:N'", w))?;
-                format!(" LIMIT {}", n)
-            } else {
-                return Err(format!("Invalid window format: '{}'. Use 'recent:N'", w));
-            }
-        } else {
-            String::new()
-        };
-
-        // Fetch snapshots for both entities
-        let order = if window.is_some() { "DESC" } else { "ASC" };
-        let query_a = format!(
-            "SELECT embedding, created_at FROM arc_snapshot WHERE entity_id = {} ORDER BY created_at {}{}",
-            entity_id_a, order, limit_clause
-        );
-        let query_b = format!(
-            "SELECT embedding, created_at FROM arc_snapshot WHERE entity_id = {} ORDER BY created_at {}{}",
-            entity_id_b, order, limit_clause
-        );
-
-        #[derive(serde::Deserialize)]
-        struct SnapshotEmbedding {
-            embedding: Vec<f32>,
-        }
-
-        let mut resp_a = self
-            .db
-            .query(&query_a)
+        let service = ArcService::new(self.db.clone());
+        let result = service
+            .analyze_comparison(entity_id_a, entity_id_b, window.as_deref())
             .await
-            .map_err(|e| format!("Failed to fetch snapshots for {}: {}", entity_id_a, e))?;
-        let mut resp_b = self
-            .db
-            .query(&query_b)
-            .await
-            .map_err(|e| format!("Failed to fetch snapshots for {}: {}", entity_id_b, e))?;
-
-        let mut snaps_a: Vec<SnapshotEmbedding> = resp_a
-            .take(0)
-            .map_err(|e| format!("Failed to parse snapshots: {}", e))?;
-        let mut snaps_b: Vec<SnapshotEmbedding> = resp_b
-            .take(0)
-            .map_err(|e| format!("Failed to parse snapshots: {}", e))?;
-
-        if snaps_a.is_empty() || snaps_b.is_empty() {
-            let missing = if snaps_a.is_empty() {
-                entity_id_a
-            } else {
-                entity_id_b
-            };
-            return Err(format!(
-                "No arc snapshots found for {}. Run BaselineArcSnapshots first.",
-                missing
-            ));
-        }
-
-        // If we fetched DESC for window, reverse to get chronological order
-        if window.is_some() {
-            snaps_a.reverse();
-            snaps_b.reverse();
-        }
-
-        // Convergence metric
-        let a_first = &snaps_a[0];
-        let a_last = &snaps_a[snaps_a.len() - 1];
-        let b_first = &snaps_b[0];
-        let b_last = &snaps_b[snaps_b.len() - 1];
-
-        let first_sim = cosine_similarity(&a_first.embedding, &b_first.embedding);
-        let latest_sim = cosine_similarity(&a_last.embedding, &b_last.embedding);
-        let convergence_delta = latest_sim - first_sim;
-
-        // Trajectory similarity
-        let delta_a = vector_subtract(&a_last.embedding, &a_first.embedding);
-        let delta_b = vector_subtract(&b_last.embedding, &b_first.embedding);
-        let trajectory_sim = cosine_similarity(&delta_a, &delta_b);
+            .map_err(|e| {
+                let msg = format!("{}", e);
+                if msg.contains("Not found") {
+                    format!("{}. Run BaselineArcSnapshots first.", msg)
+                } else {
+                    msg
+                }
+            })?;
 
         let name_a = self.extract_name_from_id(entity_id_a);
         let name_b = self.extract_name_from_id(entity_id_b);
-
-        // Interpret convergence
-        let convergence_desc = if convergence_delta.abs() < 0.02 {
-            "stable relationship (no significant convergence or divergence)"
-        } else if convergence_delta > 0.0 {
-            "converging (becoming more similar)"
-        } else {
-            "diverging (becoming less similar)"
-        };
-
-        // Interpret trajectory
-        let trajectory_desc = if trajectory_sim > 0.5 {
-            "similar trajectories (evolving in the same direction)"
-        } else if trajectory_sim < -0.3 {
-            "opposite trajectories (evolving in opposing directions)"
-        } else {
-            "independent trajectories (evolving in unrelated directions)"
-        };
 
         let content = format!(
             "Arc Comparison: {} vs {}\n\n\
@@ -244,38 +120,41 @@ impl NarraServer {
              Snapshots analyzed: {} vs {}",
             name_a,
             name_b,
-            first_sim,
-            latest_sim,
-            convergence_delta,
-            convergence_desc,
-            trajectory_sim,
-            trajectory_desc,
-            snaps_a.len(),
-            snaps_b.len()
+            result.initial_similarity,
+            result.current_similarity,
+            result.convergence_delta,
+            result.convergence,
+            result.trajectory_similarity,
+            result.trajectory,
+            result.snapshots_a,
+            result.snapshots_b
         );
 
-        let result = EntityResult {
+        let er = EntityResult {
             id: format!("arc-comparison-{}-{}", name_a, name_b),
             entity_type: "arc_comparison".to_string(),
             name: format!("{} vs {}", name_a, name_b),
             content,
-            confidence: Some(convergence_delta.abs()),
+            confidence: Some(result.convergence_delta.abs()),
             last_modified: None,
         };
 
         let hints = vec![
             format!(
                 "Convergence: {:+.4} ({})",
-                convergence_delta, convergence_desc
+                result.convergence_delta, result.convergence
             ),
-            format!("Trajectory: {:.4} ({})", trajectory_sim, trajectory_desc),
+            format!(
+                "Trajectory: {:.4} ({})",
+                result.trajectory_similarity, result.trajectory
+            ),
             "Use ArcHistory on each entity for detailed snapshot-by-snapshot view".to_string(),
         ];
 
-        let token_estimate = result.content.len() / 4 + 50;
+        let token_estimate = er.content.len() / 4 + 50;
 
         Ok(QueryResponse {
-            results: vec![result],
+            results: vec![er],
             total: 1,
             next_cursor: None,
             hints,
@@ -359,8 +238,6 @@ impl NarraServer {
             let eid = dr.entity_id.to_string();
 
             // Fetch first and last embeddings
-            // Note: SurrealDB requires ORDER BY fields in the SELECT projection,
-            // so we select both embedding and created_at.
             let first_query = format!(
                 "SELECT embedding, created_at FROM arc_snapshot WHERE entity_id = {} ORDER BY created_at ASC LIMIT 1",
                 eid
@@ -446,87 +323,28 @@ impl NarraServer {
         entity_id: &str,
         event_id: Option<String>,
     ) -> Result<QueryResponse, String> {
-        let mut response = if let Some(ref eid) = event_id {
-            // Resolve event timestamp
-            let event_ref = if eid.starts_with("event:") {
-                eid.clone()
-            } else {
-                format!("event:{}", eid)
-            };
-            let time_query = format!("SELECT VALUE created_at FROM {}", event_ref);
+        let service = ArcService::new(self.db.clone());
+        let result = service
+            .analyze_moment(entity_id, event_id.as_deref())
+            .await
+            .map_err(|e| {
+                let msg = format!("{}", e);
+                if msg.contains("Not found") {
+                    format!("{}. Run BaselineArcSnapshots first.", msg)
+                } else {
+                    msg
+                }
+            })?;
 
-            let mut time_resp = self
-                .db
-                .query(&time_query)
-                .await
-                .map_err(|e| format!("Failed to resolve event timestamp: {}", e))?;
-
-            let timestamps: Vec<surrealdb::Datetime> = time_resp.take(0).unwrap_or_default();
-
-            if let Some(event_time) = timestamps.first() {
-                // Find nearest-before snapshot using parameter binding for datetime
-                let snapshot_query = format!(
-                    "SELECT *, event_id.title AS event_title FROM arc_snapshot \
-                     WHERE entity_id = {} AND created_at <= $event_time \
-                     ORDER BY created_at DESC LIMIT 1",
-                    entity_id
-                );
-                self.db
-                    .query(&snapshot_query)
-                    .bind(("event_time", event_time.clone()))
-                    .await
-                    .map_err(|e| format!("Arc moment query failed: {}", e))?
-            } else {
-                return Err(format!("Event not found or has no timestamp: {}", eid));
-            }
-        } else {
-            // Latest snapshot
-            let snapshot_query = format!(
-                "SELECT *, event_id.title AS event_title FROM arc_snapshot \
-                 WHERE entity_id = {} ORDER BY created_at DESC LIMIT 1",
-                entity_id
-            );
-            self.db
-                .query(&snapshot_query)
-                .await
-                .map_err(|e| format!("Arc moment query failed: {}", e))?
-        };
-
-        #[derive(serde::Deserialize)]
-        struct MomentSnapshot {
-            id: surrealdb::sql::Thing,
-            entity_type: String,
-            delta_magnitude: Option<f32>,
-            event_title: Option<String>,
-            created_at: String,
-        }
-
-        let snapshots: Vec<MomentSnapshot> = response
-            .take(0)
-            .map_err(|e| format!("Failed to parse moment snapshot: {}", e))?;
-
-        if snapshots.is_empty() {
-            let context = if event_id.is_some() {
-                "at that event"
-            } else {
-                "at all"
-            };
-            return Err(format!(
-                "No arc snapshot found for {} {}. Run BaselineArcSnapshots first.",
-                entity_id, context
-            ));
-        }
-
-        let snap = &snapshots[0];
         let entity_name = self.extract_name_from_id(entity_id);
 
-        let event_info = snap
+        let event_info = result
             .event_title
             .as_ref()
             .map(|t| format!(" (event: {})", t))
             .unwrap_or_default();
 
-        let delta_str = snap
+        let delta_str = result
             .delta_magnitude
             .map(|d| format!("{:.4}", d))
             .unwrap_or_else(|| "baseline".to_string());
@@ -539,28 +357,28 @@ impl NarraServer {
 
         let content = format!(
             "{} {} snapshot: delta={}, captured at {}{}",
-            entity_name, moment_desc, delta_str, snap.created_at, event_info
+            entity_name, moment_desc, delta_str, result.created_at, event_info
         );
 
-        let result = EntityResult {
-            id: snap.id.to_string(),
-            entity_type: snap.entity_type.clone(),
+        let er = EntityResult {
+            id: format!("arc_snapshot:{}:{}", entity_id, result.created_at),
+            entity_type: result.entity_type.clone(),
             name: format!("{} ({})", entity_name, moment_desc),
             content,
-            confidence: snap.delta_magnitude,
-            last_modified: Some(snap.created_at.clone()),
+            confidence: result.delta_magnitude,
+            last_modified: Some(result.created_at.clone()),
         };
 
         let hints = vec![
-            format!("Snapshot for {} at {}", entity_id, snap.created_at),
+            format!("Snapshot for {} at {}", entity_id, result.created_at),
             "Use ArcHistory for full timeline view".to_string(),
             "Use ArcComparison to compare with another entity at the same point".to_string(),
         ];
 
-        let token_estimate = result.content.len() / 4 + 30;
+        let token_estimate = er.content.len() / 4 + 30;
 
         Ok(QueryResponse {
-            results: vec![result],
+            results: vec![er],
             total: 1,
             next_cursor: None,
             hints,
@@ -585,8 +403,6 @@ impl NarraServer {
         let mut overall_stale = 0usize;
 
         for (table, _) in &embeddable_tables {
-            // SurrealDB GROUP ALL with conditional count can be unreliable,
-            // so use separate queries for reliability
             let total_query = format!("SELECT count() AS cnt FROM {} GROUP ALL", table);
             let embedded_query = format!(
                 "SELECT count() AS cnt FROM {} WHERE embedding IS NOT NONE GROUP ALL",

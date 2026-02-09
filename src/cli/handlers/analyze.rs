@@ -3,11 +3,14 @@
 use anyhow::Result;
 use serde::Serialize;
 
-use crate::cli::output::{output_json, output_json_list, print_table, OutputMode};
+use crate::cli::output::{
+    output_json, output_json_list, print_header, print_kv, print_table, OutputMode,
+};
+use crate::cli::resolve::resolve_by_name;
 use crate::init::AppContext;
 use crate::services::{
-    CentralityMetric, CompositeIntelligenceService, GraphAnalyticsService, InfluenceService,
-    IronyService,
+    CentralityMetric, ClusteringService, CompositeIntelligenceService, EntityType,
+    GraphAnalyticsService, InfluenceService, IronyService,
 };
 
 pub async fn handle_centrality(
@@ -646,6 +649,257 @@ pub async fn handle_scene_prep(
             println!("\nOpportunities:");
             for o in &plan.opportunities {
                 println!("  - {}", o);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+pub async fn handle_themes(
+    ctx: &AppContext,
+    types: Option<Vec<String>>,
+    clusters: Option<usize>,
+    mode: OutputMode,
+) -> Result<()> {
+    let entity_types: Vec<EntityType> = match types {
+        Some(ref type_strs) => type_strs
+            .iter()
+            .filter_map(|t| match t.as_str() {
+                "character" | "char" => Some(EntityType::Character),
+                "location" => Some(EntityType::Location),
+                "event" => Some(EntityType::Event),
+                "scene" => Some(EntityType::Scene),
+                "knowledge" => Some(EntityType::Knowledge),
+                _ => {
+                    eprintln!("Unknown type '{}', skipping", t);
+                    None
+                }
+            })
+            .collect(),
+        None => EntityType::embeddable(),
+    };
+
+    let service = ClusteringService::new(ctx.db.clone());
+    let result = service
+        .discover_themes(entity_types, clusters)
+        .await
+        .map_err(|e| anyhow::anyhow!("Thematic clustering failed: {}", e))?;
+
+    if mode == OutputMode::Json {
+        output_json(&result);
+    } else {
+        println!(
+            "Thematic Clustering: {} clusters from {} entities ({} without embeddings)",
+            result.clusters.len(),
+            result.total_entities,
+            result.entities_without_embeddings
+        );
+
+        for cluster in &result.clusters {
+            print_header(&format!(
+                "Cluster {}: {} ({} members)",
+                cluster.cluster_id, cluster.label, cluster.member_count
+            ));
+            let rows: Vec<Vec<String>> = cluster
+                .members
+                .iter()
+                .map(|m| {
+                    vec![
+                        m.entity_type.clone(),
+                        m.entity_id.clone(),
+                        m.name.clone(),
+                        format!("{:.4}", m.centrality),
+                    ]
+                })
+                .collect();
+            print_table(&["Type", "ID", "Name", "Centrality"], rows);
+        }
+    }
+
+    Ok(())
+}
+
+pub async fn handle_thematic_gaps(
+    ctx: &AppContext,
+    min_size: usize,
+    expected_types: Option<Vec<String>>,
+    mode: OutputMode,
+) -> Result<()> {
+    let service = ClusteringService::new(ctx.db.clone());
+    let clustering_result = service
+        .discover_themes(EntityType::embeddable(), None)
+        .await
+        .map_err(|e| anyhow::anyhow!("Thematic gap analysis failed: {}", e))?;
+
+    let expected =
+        expected_types.unwrap_or_else(|| vec!["character".to_string(), "event".to_string()]);
+
+    #[derive(Serialize)]
+    struct GapResult {
+        cluster_label: String,
+        member_count: usize,
+        present_types: Vec<String>,
+        missing_types: Vec<String>,
+        severity: f32,
+        interpretation: String,
+    }
+
+    let mut gaps: Vec<GapResult> = Vec::new();
+
+    for cluster in &clustering_result.clusters {
+        if cluster.member_count < min_size {
+            continue;
+        }
+
+        let mut type_counts: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
+        for member in &cluster.members {
+            *type_counts.entry(member.entity_type.clone()).or_insert(0) += 1;
+        }
+
+        let missing: Vec<String> = expected
+            .iter()
+            .filter(|t| !type_counts.contains_key(t.as_str()))
+            .cloned()
+            .collect();
+
+        if missing.is_empty() {
+            continue;
+        }
+
+        let has_type = |t: &str| type_counts.contains_key(t);
+        let interpretation = if has_type("event") && !has_type("character") {
+            "Events without protagonists — who drives this theme?"
+        } else if has_type("character") && !has_type("event") {
+            "Characters without plot — what happens to embody this?"
+        } else if !has_type("scene") && missing.contains(&"scene".to_string()) {
+            "No scenes ground this theme — where does it come to life?"
+        } else {
+            "Theme has structural gaps — consider adding missing entity types."
+        };
+
+        let present_types: Vec<String> = type_counts.keys().cloned().collect();
+        let severity = missing.len() as f32 / expected.len() as f32;
+
+        gaps.push(GapResult {
+            cluster_label: cluster.label.clone(),
+            member_count: cluster.member_count,
+            present_types,
+            missing_types: missing,
+            severity,
+            interpretation: interpretation.to_string(),
+        });
+    }
+
+    gaps.sort_by(|a, b| {
+        b.severity
+            .partial_cmp(&a.severity)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    if mode == OutputMode::Json {
+        output_json_list(&gaps);
+    } else {
+        println!(
+            "Thematic gaps: {} clusters analyzed, {} with gaps",
+            clustering_result.clusters.len(),
+            gaps.len()
+        );
+
+        let rows: Vec<Vec<String>> = gaps
+            .iter()
+            .map(|g| {
+                vec![
+                    g.cluster_label.clone(),
+                    format!("{}", g.member_count),
+                    g.present_types.join(", "),
+                    g.missing_types.join(", "),
+                    g.interpretation.clone(),
+                ]
+            })
+            .collect();
+        print_table(
+            &["Theme", "Members", "Has", "Missing", "Interpretation"],
+            rows,
+        );
+    }
+
+    Ok(())
+}
+
+pub async fn handle_impact(
+    ctx: &AppContext,
+    entity: &str,
+    description: Option<String>,
+    mode: OutputMode,
+    no_semantic: bool,
+) -> Result<()> {
+    let entity_id = if entity.contains(':') {
+        entity.to_string()
+    } else {
+        let search_svc = if no_semantic {
+            None
+        } else {
+            Some(ctx.search_service.as_ref())
+        };
+        let matches = resolve_by_name(&ctx.db, entity, search_svc).await?;
+        match matches.len() {
+            0 => anyhow::bail!("No entity found for '{}'", entity),
+            1 => matches[0].id.clone(),
+            _ => {
+                for m in &matches {
+                    eprintln!("  {} ({})", m.id, m.name);
+                }
+                anyhow::bail!("Ambiguous name. Use a full ID.");
+            }
+        }
+    };
+
+    let desc = description.as_deref().unwrap_or("general change");
+    let analysis = ctx
+        .impact_service
+        .analyze_impact(&entity_id, desc, 3)
+        .await
+        .map_err(|e| anyhow::anyhow!("Impact analysis failed: {}", e))?;
+
+    if mode == OutputMode::Json {
+        output_json(&analysis);
+    } else {
+        print_header(&format!(
+            "Impact Analysis: {} (\"{}\")",
+            analysis.changed_entity, analysis.change_description
+        ));
+        print_kv("Total affected", &format!("{}", analysis.total_affected));
+        print_kv(
+            "Protected entities impacted",
+            &format!("{}", analysis.has_protected_impact),
+        );
+
+        for severity in &["critical", "high", "medium", "low"] {
+            if let Some(entities) = analysis.affected_by_severity.get(*severity) {
+                if !entities.is_empty() {
+                    println!("\n{} ({}):", severity.to_uppercase(), entities.len());
+                    let rows: Vec<Vec<String>> = entities
+                        .iter()
+                        .map(|e| {
+                            vec![
+                                e.entity_type.clone(),
+                                e.name.clone(),
+                                e.reason.clone(),
+                                format!("{}", e.distance),
+                            ]
+                        })
+                        .collect();
+                    print_table(&["Type", "Name", "Reason", "Distance"], rows);
+                }
+            }
+        }
+
+        if !analysis.warnings.is_empty() {
+            println!("\nWarnings:");
+            for w in &analysis.warnings {
+                println!("  - {}", w);
             }
         }
     }

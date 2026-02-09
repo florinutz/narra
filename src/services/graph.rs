@@ -67,7 +67,7 @@ fn relationship_class(rel_type: &str) -> String {
 }
 
 /// Result of a reverse query - entities that reference the target
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 pub struct ReverseQueryResult {
     pub entity_type: String,
     pub entity_id: String,

@@ -569,3 +569,70 @@ pub async fn create_scene(
     }
     Ok(())
 }
+
+// =============================================================================
+// Protect / Unprotect
+// =============================================================================
+
+pub async fn handle_protect(
+    ctx: &AppContext,
+    entity: &str,
+    mode: OutputMode,
+    no_semantic: bool,
+) -> Result<()> {
+    let entity_id = resolve_to_id(ctx, entity, no_semantic).await?;
+    ctx.impact_service.protect_entity(&entity_id).await;
+
+    if mode == OutputMode::Json {
+        output_json(&serde_json::json!({
+            "status": "protected",
+            "entity_id": entity_id,
+        }));
+    } else {
+        print_success(&format!("Protected entity '{}'", entity_id));
+        print_hint("Protection is in-memory only and will be lost on restart.");
+    }
+    Ok(())
+}
+
+pub async fn handle_unprotect(
+    ctx: &AppContext,
+    entity: &str,
+    mode: OutputMode,
+    no_semantic: bool,
+) -> Result<()> {
+    let entity_id = resolve_to_id(ctx, entity, no_semantic).await?;
+    ctx.impact_service.unprotect_entity(&entity_id).await;
+
+    if mode == OutputMode::Json {
+        output_json(&serde_json::json!({
+            "status": "unprotected",
+            "entity_id": entity_id,
+        }));
+    } else {
+        print_success(&format!("Removed protection from '{}'", entity_id));
+    }
+    Ok(())
+}
+
+async fn resolve_to_id(ctx: &AppContext, input: &str, no_semantic: bool) -> Result<String> {
+    if input.contains(':') {
+        return Ok(input.to_string());
+    }
+    let search_svc = if no_semantic {
+        None
+    } else {
+        Some(ctx.search_service.as_ref())
+    };
+    let matches = resolve_by_name(&ctx.db, input, search_svc).await?;
+    match matches.len() {
+        0 => anyhow::bail!("No entity found for '{}'", input),
+        1 => Ok(matches[0].id.clone()),
+        _ => {
+            for m in &matches {
+                eprintln!("  {} ({})", m.id, m.name);
+            }
+            anyhow::bail!("Ambiguous name. Use a full ID.");
+        }
+    }
+}

@@ -1,3 +1,4 @@
+pub mod arc;
 pub mod clustering;
 pub mod composite;
 pub mod consistency;
@@ -9,6 +10,7 @@ pub mod impact;
 pub mod import;
 pub mod influence;
 pub mod irony;
+pub mod perception;
 pub mod search;
 pub mod summary;
 
@@ -36,4 +38,9 @@ pub use search::{
 pub use summary::{
     CachedSummaryService, DetailLevel, EntityFullContent, EntitySummary, SummaryConfig,
     SummaryService,
+};
+
+pub use arc::{ArcComparisonResult, ArcHistoryResult, ArcMomentResult, ArcService};
+pub use perception::{
+    PerceptionGapResult, PerceptionMatrixResult, PerceptionService, PerceptionShiftResult,
 };
