@@ -4,11 +4,11 @@
 //! structural protagonists, narrative hubs, and bridging characters in the
 //! character relationship network.
 
+use crate::db::connection::NarraDb;
 use async_trait::async_trait;
 use graphrs::{algorithms::centrality, Edge, Graph, GraphSpecs, Node};
 use std::collections::HashMap;
 use std::sync::Arc;
-use surrealdb::{engine::local::Db, Surreal};
 
 use crate::NarraError;
 
@@ -81,11 +81,11 @@ pub trait GraphDataProvider: Send + Sync {
 
 /// SurrealDB implementation of GraphDataProvider.
 pub struct SurrealGraphDataProvider {
-    db: Arc<Surreal<Db>>,
+    db: Arc<NarraDb>,
 }
 
 impl SurrealGraphDataProvider {
-    pub fn new(db: Arc<Surreal<Db>>) -> Self {
+    pub fn new(db: Arc<NarraDb>) -> Self {
         Self { db }
     }
 }
@@ -163,7 +163,7 @@ pub struct GraphAnalyticsService {
 }
 
 impl GraphAnalyticsService {
-    pub fn new(db: Arc<Surreal<Db>>) -> Self {
+    pub fn new(db: Arc<NarraDb>) -> Self {
         Self {
             data: Arc::new(SurrealGraphDataProvider::new(db)),
         }

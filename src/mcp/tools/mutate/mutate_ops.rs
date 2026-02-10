@@ -337,7 +337,7 @@ impl NarraServer {
 /// Called when relationships between characters change, which may affect
 /// how they perceive each other.
 async fn mark_perspective_stale_for_pair(
-    db: &surrealdb::Surreal<surrealdb::engine::local::Db>,
+    db: &crate::db::connection::NarraDb,
     staleness_manager: &crate::embedding::StalenessManager,
     char_a: &str,
     char_b: &str,

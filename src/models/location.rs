@@ -1,6 +1,6 @@
+use crate::db::connection::NarraDb;
 use serde::{Deserialize, Serialize};
-use surrealdb::engine::local::Db;
-use surrealdb::{Datetime, RecordId, Surreal};
+use surrealdb::{Datetime, RecordId};
 
 use crate::NarraError;
 
@@ -49,17 +49,14 @@ pub struct LocationUpdate {
 /// # Returns
 ///
 /// The created location with generated ID and timestamps.
-pub async fn create_location(
-    db: &Surreal<Db>,
-    data: LocationCreate,
-) -> Result<Location, NarraError> {
+pub async fn create_location(db: &NarraDb, data: LocationCreate) -> Result<Location, NarraError> {
     let result: Option<Location> = db.create("location").content(data).await?;
     result.ok_or_else(|| NarraError::Database("Failed to create location".into()))
 }
 
 /// Create a new location with a caller-specified ID.
 pub async fn create_location_with_id(
-    db: &Surreal<Db>,
+    db: &NarraDb,
     id: &str,
     data: LocationCreate,
 ) -> Result<Location, NarraError> {
@@ -77,7 +74,7 @@ pub async fn create_location_with_id(
 /// # Returns
 ///
 /// The location if found, None otherwise.
-pub async fn get_location(db: &Surreal<Db>, id: &str) -> Result<Option<Location>, NarraError> {
+pub async fn get_location(db: &NarraDb, id: &str) -> Result<Option<Location>, NarraError> {
     let result: Option<Location> = db.select(("location", id)).await?;
     Ok(result)
 }
@@ -91,7 +88,7 @@ pub async fn get_location(db: &Surreal<Db>, id: &str) -> Result<Option<Location>
 /// # Returns
 ///
 /// A vector of all locations.
-pub async fn list_locations(db: &Surreal<Db>) -> Result<Vec<Location>, NarraError> {
+pub async fn list_locations(db: &NarraDb) -> Result<Vec<Location>, NarraError> {
     let result: Vec<Location> = db.select("location").await?;
     Ok(result)
 }
@@ -108,7 +105,7 @@ pub async fn list_locations(db: &Surreal<Db>) -> Result<Vec<Location>, NarraErro
 ///
 /// The updated location if found, None otherwise.
 pub async fn update_location(
-    db: &Surreal<Db>,
+    db: &NarraDb,
     id: &str,
     data: LocationUpdate,
 ) -> Result<Option<Location>, NarraError> {
@@ -132,7 +129,7 @@ pub async fn update_location(
 /// Returns `ReferentialIntegrityViolation` if the location is referenced by other entities
 /// (e.g., used as primary_location in scenes or as parent of other locations) and cannot be
 /// deleted due to ON DELETE REJECT constraints.
-pub async fn delete_location(db: &Surreal<Db>, id: &str) -> Result<Option<Location>, NarraError> {
+pub async fn delete_location(db: &NarraDb, id: &str) -> Result<Option<Location>, NarraError> {
     match db.delete::<Option<Location>>(("location", id)).await {
         Ok(result) => Ok(result),
         Err(e) => {
@@ -163,7 +160,7 @@ pub async fn delete_location(db: &Surreal<Db>, id: &str) -> Result<Option<Locati
 /// # Returns
 ///
 /// A vector of child locations.
-pub async fn get_children(db: &Surreal<Db>, parent_id: &str) -> Result<Vec<Location>, NarraError> {
+pub async fn get_children(db: &NarraDb, parent_id: &str) -> Result<Vec<Location>, NarraError> {
     let parent = RecordId::from(("location", parent_id));
     let mut result = db
         .query("SELECT * FROM location WHERE parent = $parent")

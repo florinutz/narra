@@ -4,9 +4,9 @@
 //! event, scene, knowledge). Attachments are stored as graph edges in the
 //! note_attachment table.
 
+use crate::db::connection::NarraDb;
 use serde::{Deserialize, Serialize};
-use surrealdb::engine::local::Db;
-use surrealdb::{Datetime, RecordId, Surreal};
+use surrealdb::{Datetime, RecordId};
 
 use crate::NarraError;
 
@@ -61,14 +61,14 @@ pub struct NoteAttachment {
 /// # Returns
 ///
 /// The created note with generated ID and timestamps.
-pub async fn create_note(db: &Surreal<Db>, data: NoteCreate) -> Result<Note, NarraError> {
+pub async fn create_note(db: &NarraDb, data: NoteCreate) -> Result<Note, NarraError> {
     let result: Option<Note> = db.create("note").content(data).await?;
     result.ok_or_else(|| NarraError::Database("Failed to create note".into()))
 }
 
 /// Create a new note with a caller-specified ID.
 pub async fn create_note_with_id(
-    db: &Surreal<Db>,
+    db: &NarraDb,
     id: &str,
     data: NoteCreate,
 ) -> Result<Note, NarraError> {
@@ -86,7 +86,7 @@ pub async fn create_note_with_id(
 /// # Returns
 ///
 /// The note if found, None otherwise.
-pub async fn get_note(db: &Surreal<Db>, id: &str) -> Result<Option<Note>, NarraError> {
+pub async fn get_note(db: &NarraDb, id: &str) -> Result<Option<Note>, NarraError> {
     let result: Option<Note> = db.select(("note", id)).await?;
     Ok(result)
 }
@@ -103,7 +103,7 @@ pub async fn get_note(db: &Surreal<Db>, id: &str) -> Result<Option<Note>, NarraE
 ///
 /// The updated note if found, None otherwise.
 pub async fn update_note(
-    db: &Surreal<Db>,
+    db: &NarraDb,
     id: &str,
     data: NoteUpdate,
 ) -> Result<Option<Note>, NarraError> {
@@ -124,7 +124,7 @@ pub async fn update_note(
 /// # Returns
 ///
 /// The deleted note if found, None otherwise.
-pub async fn delete_note(db: &Surreal<Db>, id: &str) -> Result<Option<Note>, NarraError> {
+pub async fn delete_note(db: &NarraDb, id: &str) -> Result<Option<Note>, NarraError> {
     let result: Option<Note> = db.delete(("note", id)).await?;
     Ok(result)
 }
@@ -141,7 +141,7 @@ pub async fn delete_note(db: &Surreal<Db>, id: &str) -> Result<Option<Note>, Nar
 ///
 /// A vector of notes ordered by created_at descending (newest first).
 pub async fn list_notes(
-    db: &Surreal<Db>,
+    db: &NarraDb,
     limit: usize,
     offset: usize,
 ) -> Result<Vec<Note>, NarraError> {
@@ -172,7 +172,7 @@ pub async fn list_notes(
 ///
 /// The created attachment edge.
 pub async fn attach_note(
-    db: &Surreal<Db>,
+    db: &NarraDb,
     note_id: &str,
     entity_id: &str,
 ) -> Result<NoteAttachment, NarraError> {
@@ -202,11 +202,7 @@ pub async fn attach_note(
 /// # Returns
 ///
 /// Ok(()) if detachment succeeded (or edge didn't exist).
-pub async fn detach_note(
-    db: &Surreal<Db>,
-    note_id: &str,
-    entity_id: &str,
-) -> Result<(), NarraError> {
+pub async fn detach_note(db: &NarraDb, note_id: &str, entity_id: &str) -> Result<(), NarraError> {
     let note_ref = RecordId::from(("note", note_id));
     let (table, key) = entity_id
         .split_once(':')
@@ -231,7 +227,7 @@ pub async fn detach_note(
 ///
 /// A vector of attachment edges for this note.
 pub async fn get_note_attachments(
-    db: &Surreal<Db>,
+    db: &NarraDb,
     note_id: &str,
 ) -> Result<Vec<NoteAttachment>, NarraError> {
     let note_ref = RecordId::from(("note", note_id));
@@ -253,7 +249,7 @@ pub async fn get_note_attachments(
 /// # Returns
 ///
 /// A vector of notes attached to this entity.
-pub async fn get_entity_notes(db: &Surreal<Db>, entity_id: &str) -> Result<Vec<Note>, NarraError> {
+pub async fn get_entity_notes(db: &NarraDb, entity_id: &str) -> Result<Vec<Note>, NarraError> {
     let (table, key) = entity_id
         .split_once(':')
         .ok_or_else(|| NarraError::Validation(format!("Invalid entity ID: {}", entity_id)))?;

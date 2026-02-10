@@ -1,8 +1,9 @@
 use std::sync::Arc;
 
 use serde::Deserialize;
-use surrealdb::engine::local::Db;
-use surrealdb::{RecordId, Surreal};
+use surrealdb::RecordId;
+
+use crate::db::connection::NarraDb;
 
 use crate::mcp::types::{
     CharacterSpec, EventSpec, FactLinkSpec, FactSpec, KnowledgeSpec, LocationSpec, NarraImport,
@@ -32,11 +33,11 @@ struct KnowledgeExportRow {
 }
 
 pub struct ExportService {
-    db: Arc<Surreal<Db>>,
+    db: Arc<NarraDb>,
 }
 
 impl ExportService {
-    pub fn new(db: Arc<Surreal<Db>>) -> Self {
+    pub fn new(db: Arc<NarraDb>) -> Self {
         Self { db }
     }
 

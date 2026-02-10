@@ -3,10 +3,10 @@
 //! Provides isolated database instances per test using tempfile.
 
 use std::sync::Arc;
-use surrealdb::{engine::local::Db, Surreal};
 use tempfile::TempDir;
 
-use narra::db::{connection::init_db, schema::apply_schema};
+use narra::db::connection::{init_db, DbConfig, NarraDb};
+use narra::db::schema::apply_schema;
 use narra::embedding::{EmbeddingService, NoopEmbeddingService};
 use narra::mcp::NarraServer;
 use narra::session::SessionStateManager;
@@ -17,7 +17,7 @@ use narra::session::SessionStateManager;
 /// The database is automatically cleaned up when the harness is dropped.
 pub struct TestHarness {
     /// Database connection wrapped in Arc for service sharing
-    pub db: Arc<Surreal<Db>>,
+    pub db: Arc<NarraDb>,
     /// Temporary directory (kept alive while harness exists)
     pub temp_dir: TempDir,
 }
@@ -30,7 +30,10 @@ impl TestHarness {
         let temp_dir = TempDir::new().expect("Failed to create temp directory for test database");
 
         let db_path = temp_dir.path().join("test.db");
-        let db = init_db(db_path.to_str().unwrap())
+        let config = DbConfig::Embedded {
+            path: Some(db_path.to_string_lossy().into_owned()),
+        };
+        let db = init_db(&config, temp_dir.path())
             .await
             .expect("Failed to initialize test database");
 

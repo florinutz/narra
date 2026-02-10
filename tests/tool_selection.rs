@@ -215,16 +215,24 @@ fn test_tool_descriptions_under_token_limit() {
 #[tokio::test]
 async fn test_context_budget_with_prompts() {
     // Verify context budget still under 10K after adding prompts
-    use narra::db::{connection::init_db, schema::apply_schema};
+    use narra::db::{
+        connection::{init_db, DbConfig},
+        schema::apply_schema,
+    };
     use tempfile::TempDir;
 
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let db_path = temp_dir.path().join("test.db");
     let session_path = temp_dir.path().join("session.json");
 
-    let db = init_db(db_path.to_str().unwrap())
-        .await
-        .expect("Failed to connect to test database");
+    let db = init_db(
+        &DbConfig::Embedded {
+            path: Some(db_path.to_string_lossy().into_owned()),
+        },
+        temp_dir.path(),
+    )
+    .await
+    .expect("Failed to connect to test database");
 
     apply_schema(&db).await.expect("Failed to apply schema");
 

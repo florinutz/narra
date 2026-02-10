@@ -1,8 +1,8 @@
 use std::collections::HashSet;
 
+use crate::db::connection::NarraDb;
 use serde::{Deserialize, Serialize};
-use surrealdb::engine::local::Db;
-use surrealdb::{Datetime, RecordId, Surreal};
+use surrealdb::{Datetime, RecordId};
 
 use crate::models::event::get_event;
 use crate::NarraError;
@@ -140,7 +140,7 @@ pub struct KnowledgeCreate {
 ///
 /// The created knowledge with generated ID and timestamp.
 pub async fn create_knowledge(
-    db: &Surreal<Db>,
+    db: &NarraDb,
     data: KnowledgeCreate,
 ) -> Result<Knowledge, NarraError> {
     let result: Option<Knowledge> = db.create("knowledge").content(data).await?;
@@ -157,7 +157,7 @@ pub async fn create_knowledge(
 /// # Returns
 ///
 /// The knowledge if found, None otherwise.
-pub async fn get_knowledge(db: &Surreal<Db>, id: &str) -> Result<Option<Knowledge>, NarraError> {
+pub async fn get_knowledge(db: &NarraDb, id: &str) -> Result<Option<Knowledge>, NarraError> {
     let result: Option<Knowledge> = db.select(("knowledge", id)).await?;
     Ok(result)
 }
@@ -173,7 +173,7 @@ pub async fn get_knowledge(db: &Surreal<Db>, id: &str) -> Result<Option<Knowledg
 ///
 /// A vector of all facts the character knows.
 pub async fn get_character_knowledge(
-    db: &Surreal<Db>,
+    db: &NarraDb,
     character_id: &str,
 ) -> Result<Vec<Knowledge>, NarraError> {
     let character = RecordId::from(("character", character_id));
@@ -195,7 +195,7 @@ pub async fn get_character_knowledge(
 /// # Returns
 ///
 /// The deleted knowledge if found, None otherwise.
-pub async fn delete_knowledge(db: &Surreal<Db>, id: &str) -> Result<Option<Knowledge>, NarraError> {
+pub async fn delete_knowledge(db: &NarraDb, id: &str) -> Result<Option<Knowledge>, NarraError> {
     let result: Option<Knowledge> = db.delete(("knowledge", id)).await?;
     Ok(result)
 }
@@ -211,7 +211,7 @@ pub async fn delete_knowledge(db: &Surreal<Db>, id: &str) -> Result<Option<Knowl
 ///
 /// A vector of knowledge entries whose fact contains the search term.
 pub async fn search_knowledge_by_fact(
-    db: &Surreal<Db>,
+    db: &NarraDb,
     fact_contains: &str,
 ) -> Result<Vec<Knowledge>, NarraError> {
     let search = fact_contains.to_string();
@@ -237,7 +237,7 @@ pub async fn search_knowledge_by_fact(
 ///
 /// The created knowledge entry.
 pub async fn record_character_knows(
-    db: &Surreal<Db>,
+    db: &NarraDb,
     character_id: &str,
     fact: &str,
 ) -> Result<Knowledge, NarraError> {
@@ -278,7 +278,7 @@ pub async fn record_character_knows(
 ///
 /// The created knowledge state edge.
 pub async fn create_knowledge_state(
-    db: &Surreal<Db>,
+    db: &NarraDb,
     character_id: &str,
     target: &str,
     data: KnowledgeStateCreate,
@@ -358,7 +358,7 @@ pub async fn create_knowledge_state(
 ///
 /// All knowledge states where this character is the knower, ordered by learned_at desc.
 pub async fn get_character_knowledge_states(
-    db: &Surreal<Db>,
+    db: &NarraDb,
     character_id: &str,
 ) -> Result<Vec<KnowledgeState>, NarraError> {
     let query = format!(
@@ -383,7 +383,7 @@ pub async fn get_character_knowledge_states(
 ///
 /// All knowledge states referencing this target, ordered by learned_at asc.
 pub async fn get_fact_knowers(
-    db: &Surreal<Db>,
+    db: &NarraDb,
     target: &str,
 ) -> Result<Vec<KnowledgeState>, NarraError> {
     let query = format!(
@@ -412,7 +412,7 @@ pub async fn get_fact_knowers(
 ///
 /// The new knowledge state edge with updated certainty.
 pub async fn update_knowledge_certainty(
-    db: &Surreal<Db>,
+    db: &NarraDb,
     character_id: &str,
     target: &str,
     new_certainty: CertaintyLevel,
@@ -446,7 +446,7 @@ pub async fn update_knowledge_certainty(
 ///
 /// The deleted knowledge state if found.
 pub async fn delete_knowledge_state(
-    db: &Surreal<Db>,
+    db: &NarraDb,
     id: &str,
 ) -> Result<Option<KnowledgeState>, NarraError> {
     let result: Option<KnowledgeState> = db.delete(("knows", id)).await?;
@@ -482,7 +482,7 @@ pub async fn delete_knowledge_state(
 ///
 /// Returns `NarraError::NotFound` if the reference event doesn't exist.
 pub async fn get_knowledge_at_event(
-    db: &Surreal<Db>,
+    db: &NarraDb,
     character_id: &str,
     event_id: &str,
 ) -> Result<Vec<KnowledgeState>, NarraError> {
@@ -540,7 +540,7 @@ fn deduplicate_by_target(states: Vec<KnowledgeState>) -> Vec<KnowledgeState> {
 ///
 /// All knowledge state edges for this pair, ordered by learned_at ascending.
 pub async fn get_knowledge_history(
-    db: &Surreal<Db>,
+    db: &NarraDb,
     character_id: &str,
     target: &str,
 ) -> Result<Vec<KnowledgeState>, NarraError> {
@@ -571,7 +571,7 @@ pub async fn get_knowledge_history(
 ///
 /// The most recent knowledge state, or None if character has never known this.
 pub async fn get_current_knowledge(
-    db: &Surreal<Db>,
+    db: &NarraDb,
     character_id: &str,
     target: &str,
 ) -> Result<Option<KnowledgeState>, NarraError> {
@@ -608,7 +608,7 @@ pub struct KnowledgeTransmission {
 ///
 /// Transmission chain ordered by learned_at ascending (earliest first).
 pub async fn get_transmission_chain(
-    db: &Surreal<Db>,
+    db: &NarraDb,
     target: &str,
 ) -> Result<Vec<KnowledgeTransmission>, NarraError> {
     let query = format!(
@@ -660,9 +660,7 @@ pub struct ConflictingState {
 /// # Returns
 ///
 /// List of conflicts, each with the target and conflicting knowledge states.
-pub async fn find_knowledge_conflicts(
-    db: &Surreal<Db>,
-) -> Result<Vec<KnowledgeConflict>, NarraError> {
+pub async fn find_knowledge_conflicts(db: &NarraDb) -> Result<Vec<KnowledgeConflict>, NarraError> {
     // Find all BelievesWrongly states - these are explicit contradictions
     // Group by target to identify conflicting knowledge
     let query = r#"
@@ -727,7 +725,7 @@ pub async fn find_knowledge_conflicts(
 ///
 /// List of character IDs who were present at the learning event.
 pub async fn get_possible_sources(
-    db: &Surreal<Db>,
+    db: &NarraDb,
     knowledge_state_id: &str,
 ) -> Result<Vec<String>, NarraError> {
     // Get the knowledge state to find its event

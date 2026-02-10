@@ -1,3 +1,4 @@
+use crate::db::connection::NarraDb;
 use rmcp::{
     handler::server::tool::ToolRouter,
     handler::server::wrapper::{Json, Parameters},
@@ -6,17 +7,17 @@ use rmcp::{
     tool, tool_handler, tool_router, ErrorData as McpError, RoleServer, ServerHandler, ServiceExt,
 };
 use std::sync::Arc;
-use surrealdb::{engine::local::Db, Surreal};
 use tracing::instrument;
 
 use crate::embedding::{EmbeddingService, StalenessManager};
 use crate::mcp::prompts::{
     get_character_voice_prompt, get_conflict_detection_prompt, get_consistency_check_prompt,
-    get_consistency_oracle_prompt, get_dramatic_irony_prompt, get_scene_planning_prompt,
+    get_consistency_oracle_prompt, get_dramatic_irony_prompt, get_getting_started_prompt,
+    get_scene_planning_prompt,
 };
 use crate::mcp::resources::{
     get_consistency_issues_resource, get_entity_resource, get_import_schema, get_import_template,
-    get_session_context_resource,
+    get_operations_guide, get_session_context_resource, get_world_overview_resource,
 };
 use crate::repository::{
     SurrealEntityRepository, SurrealKnowledgeRepository, SurrealRelationshipRepository,
@@ -32,7 +33,11 @@ use crate::session::SessionStateManager;
 use crate::mcp::tools::export::{ExportRequest, ExportResponse};
 use crate::mcp::tools::graph::{GraphRequest, GraphResponse};
 use crate::mcp::{
-    MutationInput, MutationResponse, QueryInput, QueryResponse, SessionInput, SessionResponse,
+    CreateCharacterInput, CreateRelationshipInput, DossierInput, IronyReportInput,
+    KeywordSearchInput, KnowledgeAsymmetriesInput, LookupInput, MutationInput, MutationResponse,
+    OverviewInput, QueryInput, QueryResponse, RecordKnowledgeInput, ScenePrepInput,
+    SemanticSearchInput, SessionInput, SessionResponse, UpdateEntityInput, ValidateEntityInput,
+    MAX_LIMIT,
 };
 
 /// MCP server for Narra world state.
@@ -40,7 +45,7 @@ use crate::mcp::{
 /// Holds all service dependencies for query and mutation operations.
 #[derive(Clone)]
 pub struct NarraServer {
-    pub(crate) db: Arc<Surreal<Db>>,
+    pub(crate) db: Arc<NarraDb>,
     pub(crate) search_service: Arc<dyn SearchService + Send + Sync>,
     pub(crate) context_service: Arc<dyn ContextService + Send + Sync>,
     pub(crate) summary_service: Arc<dyn SummaryService + Send + Sync>,
@@ -59,7 +64,7 @@ pub struct NarraServer {
 impl NarraServer {
     /// Create a new MCP server with the given database connection.
     pub async fn new(
-        db: Arc<Surreal<Db>>,
+        db: Arc<NarraDb>,
         session_manager: Arc<SessionStateManager>,
         embedding_service: Arc<dyn EmbeddingService + Send + Sync>,
     ) -> Self {
@@ -108,12 +113,12 @@ impl NarraServer {
     }
 
     // ==========================================================================
-    // MCP TOOLS (5 consolidated) - All #[tool] methods must be in this impl block
-    // Implementation details are in tools/*.rs files
+    // MCP TOOLS (18 total) - All #[tool] methods must be in this impl block
+    // 5 parameterized + 13 dedicated. Implementation details in tools/*.rs files
     // ==========================================================================
 
     #[tool(
-        description = "Query world state: lookup, search (keyword/semantic/hybrid), graph analytics, thematic clustering, arc tracking, perspective vectors, validation, and impact preview. Returns entities with confidence scores."
+        description = "Advanced read operations (40): graph analytics, arc tracking, perspectives, clustering, vector ops, and more. For common queries, prefer the dedicated tools: semantic_search, search, lookup, dossier, scene_prep, irony_report, knowledge_asymmetries, validate_entity."
     )]
     #[instrument(name = "mcp.query", skip_all)]
     pub async fn query(
@@ -124,7 +129,7 @@ impl NarraServer {
     }
 
     #[tool(
-        description = "Modify world state: create/update/delete entities, record knowledge, manage facts and notes, batch create, import world from YAML (ImportYaml — read narra://schema/import-template first), embeddings, protect entities. CRITICAL violations block mutations."
+        description = "Advanced write operations (25): batch creation, YAML import, embeddings, arc baselines, protect/unprotect, and more. For common writes, prefer: record_knowledge, create_character, create_relationship, update_entity."
     )]
     #[instrument(name = "mcp.mutate", skip_all)]
     pub async fn mutate(
@@ -166,6 +171,230 @@ impl NarraServer {
     ) -> Result<Json<GraphResponse>, String> {
         self.handle_generate_graph(request).await.map(Json)
     }
+
+    // ==========================================================================
+    // DEDICATED TOOLS — Essential 5
+    // ==========================================================================
+
+    #[tool(
+        description = "Find entities by meaning and theme using semantic similarity. Best for concept queries like 'characters struggling with duty' or 'scenes about betrayal'. Use 'search' for keyword/name lookups instead."
+    )]
+    #[instrument(name = "mcp.semantic_search", skip_all)]
+    pub async fn semantic_search(
+        &self,
+        request: Parameters<SemanticSearchInput>,
+    ) -> Result<Json<QueryResponse>, String> {
+        let Parameters(input) = request;
+        self.handle_semantic_search(
+            &input.query,
+            input.entity_types,
+            input.limit.unwrap_or(10).min(MAX_LIMIT),
+            None,
+        )
+        .await
+        .map(Json)
+    }
+
+    #[tool(
+        description = "Full character analysis: network position, knowledge, perceptions, arc trajectory, and narrative suggestions. Takes a character ID."
+    )]
+    #[instrument(name = "mcp.dossier", skip_all)]
+    pub async fn dossier(
+        &self,
+        request: Parameters<DossierInput>,
+    ) -> Result<Json<QueryResponse>, String> {
+        let Parameters(input) = request;
+        self.handle_character_dossier(&input.character_id)
+            .await
+            .map(Json)
+    }
+
+    #[tool(
+        description = "Scene preparation: pairwise character dynamics, dramatic irony opportunities, tensions, and applicable facts for a set of characters about to meet."
+    )]
+    #[instrument(name = "mcp.scene_prep", skip_all)]
+    pub async fn scene_prep(
+        &self,
+        request: Parameters<ScenePrepInput>,
+    ) -> Result<Json<QueryResponse>, String> {
+        let Parameters(input) = request;
+        self.handle_scene_planning(&input.character_ids)
+            .await
+            .map(Json)
+    }
+
+    #[tool(
+        description = "World overview: entity counts and summaries. Filter by type ('character', 'location', 'event', 'scene') or 'all'."
+    )]
+    #[instrument(name = "mcp.overview", skip_all)]
+    pub async fn overview(
+        &self,
+        request: Parameters<OverviewInput>,
+    ) -> Result<Json<QueryResponse>, String> {
+        let Parameters(input) = request;
+        self.handle_overview(&input.entity_type, input.limit.unwrap_or(20).min(MAX_LIMIT))
+            .await
+            .map(Json)
+    }
+
+    #[tool(
+        description = "Record what a character knows or believes about something. Supports certainty levels: knows, suspects, believes_wrongly, uncertain."
+    )]
+    #[instrument(name = "mcp.record_knowledge", skip_all)]
+    pub async fn record_knowledge(
+        &self,
+        request: Parameters<RecordKnowledgeInput>,
+    ) -> Result<Json<MutationResponse>, String> {
+        let Parameters(input) = request;
+        self.handle_record_knowledge(
+            input.character_id,
+            input.target_id,
+            input.fact,
+            input.certainty,
+            input.method,
+            input.source_character_id,
+            input.event_id,
+        )
+        .await
+        .map(Json)
+    }
+
+    // ==========================================================================
+    // DEDICATED TOOLS — Standard 8
+    // ==========================================================================
+
+    #[tool(
+        description = "Find entities by keyword (names, titles). Use 'semantic_search' for concept/theme queries instead."
+    )]
+    #[instrument(name = "mcp.search", skip_all)]
+    pub async fn search(
+        &self,
+        request: Parameters<KeywordSearchInput>,
+    ) -> Result<Json<QueryResponse>, String> {
+        let Parameters(input) = request;
+        self.handle_search(
+            &input.query,
+            input.entity_types,
+            input.limit.unwrap_or(10).min(MAX_LIMIT),
+            None,
+        )
+        .await
+        .map(Json)
+    }
+
+    #[tool(
+        description = "Get a specific entity by ID. Returns full entity data with relationships and knowledge."
+    )]
+    #[instrument(name = "mcp.lookup", skip_all)]
+    pub async fn lookup(
+        &self,
+        request: Parameters<LookupInput>,
+    ) -> Result<Json<QueryResponse>, String> {
+        let Parameters(input) = request;
+        self.handle_lookup(&input.entity_id, input.detail_level.unwrap_or_default())
+            .await
+            .map(Json)
+    }
+
+    #[tool(
+        description = "Create a new character with optional profile (wound, secret, desire, contradiction categories)."
+    )]
+    #[instrument(name = "mcp.create_character", skip_all)]
+    pub async fn create_character(
+        &self,
+        request: Parameters<CreateCharacterInput>,
+    ) -> Result<Json<MutationResponse>, String> {
+        let Parameters(input) = request;
+        self.handle_create_character(
+            input.id,
+            input.name,
+            input.role,
+            input.aliases,
+            input.description,
+            input.profile,
+        )
+        .await
+        .map(Json)
+    }
+
+    #[tool(
+        description = "Create a directional relationship between two characters (e.g., ally, enemy, mentor, rival)."
+    )]
+    #[instrument(name = "mcp.create_relationship", skip_all)]
+    pub async fn create_relationship(
+        &self,
+        request: Parameters<CreateRelationshipInput>,
+    ) -> Result<Json<MutationResponse>, String> {
+        let Parameters(input) = request;
+        self.handle_create_relationship(
+            input.from_character_id,
+            input.to_character_id,
+            input.rel_type,
+            input.subtype,
+            input.label,
+        )
+        .await
+        .map(Json)
+    }
+
+    #[tool(
+        description = "Dramatic irony report: knowledge asymmetries that create tension. Optionally focus on one character."
+    )]
+    #[instrument(name = "mcp.irony_report", skip_all)]
+    pub async fn irony_report(
+        &self,
+        request: Parameters<IronyReportInput>,
+    ) -> Result<Json<QueryResponse>, String> {
+        let Parameters(input) = request;
+        self.handle_dramatic_irony_report(
+            input.character_id,
+            input.min_scene_threshold.unwrap_or(3),
+        )
+        .await
+        .map(Json)
+    }
+
+    #[tool(
+        description = "Update any entity's fields. Pass entity_id and a JSON object of fields to modify."
+    )]
+    #[instrument(name = "mcp.update_entity", skip_all)]
+    pub async fn update_entity(
+        &self,
+        request: Parameters<UpdateEntityInput>,
+    ) -> Result<Json<MutationResponse>, String> {
+        let Parameters(input) = request;
+        self.handle_update(&input.entity_id, input.fields)
+            .await
+            .map(Json)
+    }
+
+    #[tool(
+        description = "Compare what two characters know: what A knows that B doesn't, and vice versa. Reveals information asymmetry for dialogue and plot."
+    )]
+    #[instrument(name = "mcp.knowledge_asymmetries", skip_all)]
+    pub async fn knowledge_asymmetries(
+        &self,
+        request: Parameters<KnowledgeAsymmetriesInput>,
+    ) -> Result<Json<QueryResponse>, String> {
+        let Parameters(input) = request;
+        self.handle_knowledge_asymmetries(&input.character_a, &input.character_b)
+            .await
+            .map(Json)
+    }
+
+    #[tool(
+        description = "Validate an entity for consistency issues: fact violations, timeline problems, relationship conflicts."
+    )]
+    #[instrument(name = "mcp.validate_entity", skip_all)]
+    pub async fn validate_entity(
+        &self,
+        request: Parameters<ValidateEntityInput>,
+    ) -> Result<Json<QueryResponse>, String> {
+        let Parameters(input) = request;
+        self.handle_validate_entity_query(&input.entity_id)
+            .await
+            .map(Json)
+    }
 }
 
 #[tool_handler]
@@ -187,58 +416,47 @@ impl ServerHandler for NarraServer {
             },
             instructions: Some(r#"# Narra World State Manager
 
-Narra manages world state for fiction writing: characters, locations, events, scenes, relationships, and character knowledge.
+3-tier tool system for narrative world state management.
 
-## Tools (5)
+## Essential Tools (use first)
+- semantic_search — Find by meaning/theme (concepts, feelings, themes)
+- dossier — Full character analysis (network, knowledge, perceptions, arc)
+- scene_prep — Scene preparation (pairwise dynamics, irony, tensions, facts)
+- overview — World overview (entity counts, summaries)
+- record_knowledge — Record what a character knows or believes
 
-**query** — Read-only (40 operations): Lookup, Search, SemanticSearch, HybridSearch, GraphTraversal, Temporal, Overview, ListNotes, GetFact, ListFacts, ReverseQuery, ConnectionPath, CentralityMetrics, InfluencePropagation, DramaticIronyReport, SemanticJoin, ThematicClustering, SemanticKnowledge, SemanticGraphSearch, ArcHistory, ArcComparison, ArcDrift, ArcMoment, PerspectiveSearch, PerceptionGap, PerceptionMatrix, PerceptionShift, UnresolvedTensions, ThematicGaps, SimilarRelationships, KnowledgeConflicts, EmbeddingHealth, WhatIf, ValidateEntity, InvestigateContradictions, KnowledgeAsymmetries, SituationReport, CharacterDossier, ScenePlanning, AnalyzeImpact.
+## Standard Tools
+- search — Find by keyword (names, titles)
+- lookup — Get entity by ID (full details)
+- create_character — Create with profile (wound, secret, desire, contradiction)
+- create_relationship — Link two characters
+- irony_report — Knowledge asymmetries causing dramatic irony
+- update_entity — Modify any entity's fields
+- knowledge_asymmetries — What A knows that B doesn't, and vice versa
+- validate_entity — Check consistency (fact violations, timeline, relationships)
 
-**mutate** — Write (25 operations): CreateCharacter, CreateLocation, CreateEvent, CreateScene, Update, RecordKnowledge, Delete, CreateNote, AttachNote, DetachNote, CreateFact, UpdateFact, DeleteFact, LinkFact, UnlinkFact, CreateRelationship, BatchCreateCharacters, BatchCreateLocations, BatchCreateEvents, BatchCreateRelationships, BackfillEmbeddings, BaselineArcSnapshots, ProtectEntity, UnprotectEntity, ImportYaml.
-
-**session** — Context (3 operations): GetContext, PinEntity, UnpinEntity.
-
-**export** — Export world data to YAML (NarraImport-compatible, re-importable).
-
-**graph** — Generate Mermaid relationship diagram.
+## Advanced Tools (parameterized, 70 operations)
+- query(operation) — 40 read ops: graph traversal, arc history/comparison/drift, perception gap/matrix/shift, centrality, influence, clustering, ...
+- mutate(operation) — 25 write ops: batch create, import YAML, backfill embeddings, baseline arcs, protect entity, ...
+- session(operation) — get_context, pin_entity, unpin_entity
+- export_world — Export to YAML
+- generate_graph — Mermaid diagram
 
 ## Resources
-- `narra://session/context` — Hot entities, pinned items, pending decisions
-- `narra://entity/{type}:{id}` — Full entity view (character, location, event, scene)
-- `narra://consistency/issues` — Current violations by severity
-- `narra://schema/import-template` — YAML template for world import (with examples)
-- `narra://schema/import-schema` — JSON Schema for import validation
-
-## Prompts
-- `check_consistency` — Guided validation with fix suggestions
-- `dramatic_irony` — Knowledge asymmetry analysis
+- narra://session/context — Hot entities, pinned items
+- narra://world/overview — Current world state summary
+- narra://entity/{type}:{id} — Full entity view
+- narra://character/{id}/dossier — Character analysis
+- narra://consistency/issues — Current violations
+- narra://operations/guide — Categorized operation list with decision trees
+- narra://schema/import-template — YAML import template
 
 ## Key Patterns
-
-**Before deletions**: query(AnalyzeImpact) first, then mutate(Delete).
-**Consistency**: CRITICAL violations block mutations. Use query(ValidateEntity) or query(InvestigateContradictions) to debug.
-**Semantic search**: Run mutate(BackfillEmbeddings) once after data entry. Use SemanticSearch for concepts, HybridSearch for names+concepts.
-**Arc tracking**: Run mutate(BaselineArcSnapshots) once. Then ArcHistory/ArcComparison/ArcDrift/ArcMoment.
-**Perspectives**: PerspectiveSearch, PerceptionGap, PerceptionMatrix, PerceptionShift for per-observer views.
-**Protection**: mutate(ProtectEntity) marks entities as critical; mutate(UnprotectEntity) removes.
-**Session**: session(GetContext) at start; session(PinEntity/UnpinEntity) for persistent context.
-
-## Quick Reference
-
-| Need | Operation |
-|------|-----------|
-| Find by name | query(Search) |
-| Find by meaning | query(SemanticSearch) |
-| Check consistency | query(ValidateEntity) |
-| Preview deletion | query(AnalyzeImpact) |
-| Create character | mutate(CreateCharacter) |
-| Record knowledge | mutate(RecordKnowledge) |
-| Track evolution | query(ArcHistory) |
-| How others see X | query(PerceptionMatrix) |
-| Narrative gaps | query(UnresolvedTensions) or query(ThematicGaps) |
-| Session context | session(GetContext) |
-| Pin entity | session(PinEntity) |
-| Protect entity | mutate(ProtectEntity) |
-| Import world | mutate(ImportYaml) — read narra://schema/import-template first |
+- Start sessions: session(get_context), then overview
+- Before deleting: query(analyze_impact) first
+- Consistency: CRITICAL violations block mutations
+- After data entry: mutate(backfill_embeddings) once
+- IDs: lowercase table:slug format (character:alice)
 "#.to_string()),
         }
     }
@@ -330,6 +548,38 @@ Narra manages world state for fiction writing: characters, locations, events, sc
                         },
                         None,
                     ),
+                    Annotated::new(
+                        RawResource {
+                            uri: "narra://world/overview".to_string(),
+                            name: "World Overview".to_string(),
+                            title: None,
+                            description: Some(
+                                "Current world state summary: entity counts and summaries by type"
+                                    .to_string()
+                            ),
+                            mime_type: Some("application/json".to_string()),
+                            size: None,
+                            icons: None,
+                            meta: None,
+                        },
+                        None,
+                    ),
+                    Annotated::new(
+                        RawResource {
+                            uri: "narra://operations/guide".to_string(),
+                            name: "Operations Guide".to_string(),
+                            title: None,
+                            description: Some(
+                                "Categorized operation list with decision trees for finding the right tool"
+                                    .to_string()
+                            ),
+                            mime_type: Some("text/markdown".to_string()),
+                            size: None,
+                            icons: None,
+                            meta: None,
+                        },
+                        None,
+                    ),
                 ],
                 next_cursor: None,
                 meta: None,
@@ -405,6 +655,10 @@ Narra manages world state for fiction writing: characters, locations, events, sc
             self.read_import_schema_resource(uri)
         } else if uri == "narra://analysis/tension-matrix" {
             self.read_tension_matrix_resource(uri).await
+        } else if uri == "narra://world/overview" {
+            self.read_world_overview_resource(uri).await
+        } else if uri == "narra://operations/guide" {
+            self.read_operations_guide_resource(uri)
         } else if let Some(rest) = uri.strip_prefix("narra://character/") {
             if let Some(char_id) = rest.strip_suffix("/dossier") {
                 let full_id = format!("character:{}", char_id);
@@ -561,6 +815,18 @@ Narra manages world state for fiction writing: characters, locations, events, sc
                         },
                     ]),
                 ),
+                Prompt::new(
+                    "getting_started",
+                    Some("First-time orientation: discover world state and learn the tool system"),
+                    Some(vec![PromptArgument {
+                        name: "focus".into(),
+                        title: None,
+                        description: Some(
+                            "Focus area: general, characters, scenes, or consistency".into(),
+                        ),
+                        required: Some(false),
+                    }]),
+                ),
             ],
             next_cursor: None,
             meta: None,
@@ -579,6 +845,7 @@ Narra manages world state for fiction writing: characters, locations, events, sc
             "character_voice" => Ok(get_character_voice_prompt(request.arguments)),
             "conflict_detection" => Ok(get_conflict_detection_prompt(request.arguments)),
             "world_consistency_oracle" => Ok(get_consistency_oracle_prompt(request.arguments)),
+            "getting_started" => Ok(get_getting_started_prompt(request.arguments)),
             _ => Err(McpError::invalid_params(
                 format!("Unknown prompt: {}", request.name),
                 None,
@@ -660,6 +927,35 @@ impl NarraServer {
                 uri: uri.to_string(),
                 mime_type: Some("application/schema+json".to_string()),
                 text: get_import_schema(),
+                meta: None,
+            }],
+        })
+    }
+
+    async fn read_world_overview_resource(
+        &self,
+        uri: &str,
+    ) -> Result<ReadResourceResult, McpError> {
+        let content = get_world_overview_resource(self)
+            .await
+            .map_err(|e| McpError::internal_error(e, None))?;
+
+        Ok(ReadResourceResult {
+            contents: vec![ResourceContents::TextResourceContents {
+                uri: uri.to_string(),
+                mime_type: Some("application/json".to_string()),
+                text: content,
+                meta: None,
+            }],
+        })
+    }
+
+    fn read_operations_guide_resource(&self, uri: &str) -> Result<ReadResourceResult, McpError> {
+        Ok(ReadResourceResult {
+            contents: vec![ResourceContents::TextResourceContents {
+                uri: uri.to_string(),
+                mime_type: Some("text/markdown".to_string()),
+                text: get_operations_guide(),
                 meta: None,
             }],
         })
@@ -796,7 +1092,7 @@ pub async fn run_mcp_server(ctx: crate::init::AppContext) -> anyhow::Result<()> 
     // Stdio transport
     let transport = (tokio::io::stdin(), tokio::io::stdout());
     let service = server.serve(transport).await?;
-    tracing::info!("MCP server listening on stdio (5 tools)");
+    tracing::info!("MCP server listening on stdio (18 tools)");
 
     // Graceful shutdown
     let session_manager = ctx.session_manager.clone();

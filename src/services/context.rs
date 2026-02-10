@@ -1,9 +1,8 @@
+use crate::db::connection::NarraDb;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
-use surrealdb::engine::local::Db;
-use surrealdb::Surreal;
 
 use crate::repository::{RelationshipRepository, SurrealRelationshipRepository};
 use crate::services::summary::{CachedSummaryService, DetailLevel, SummaryService};
@@ -120,7 +119,7 @@ pub trait ContextService: Send + Sync {
 
 /// Cached implementation of ContextService with hot entity tracking.
 pub struct CachedContextService {
-    db: Arc<Surreal<Db>>,
+    db: Arc<NarraDb>,
     relationship_repo: Arc<SurrealRelationshipRepository>,
     summary_service: Arc<CachedSummaryService>,
     /// Session state manager (single source of truth for pinned/recent)
@@ -129,7 +128,7 @@ pub struct CachedContextService {
 
 impl CachedContextService {
     /// Create a new cached context service.
-    pub fn new(db: Arc<Surreal<Db>>, session_manager: Arc<SessionStateManager>) -> Self {
+    pub fn new(db: Arc<NarraDb>, session_manager: Arc<SessionStateManager>) -> Self {
         Self {
             db: db.clone(),
             relationship_repo: Arc::new(SurrealRelationshipRepository::new(db.clone())),

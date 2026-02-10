@@ -1,6 +1,6 @@
+use crate::db::connection::NarraDb;
 use serde::{Deserialize, Serialize};
-use surrealdb::engine::local::Db;
-use surrealdb::{Datetime, RecordId, Surreal};
+use surrealdb::{Datetime, RecordId};
 
 use crate::NarraError;
 
@@ -63,14 +63,14 @@ pub struct EventUpdate {
 /// # Returns
 ///
 /// The created event with generated ID and timestamps.
-pub async fn create_event(db: &Surreal<Db>, data: EventCreate) -> Result<Event, NarraError> {
+pub async fn create_event(db: &NarraDb, data: EventCreate) -> Result<Event, NarraError> {
     let result: Option<Event> = db.create("event").content(data).await?;
     result.ok_or_else(|| NarraError::Database("Failed to create event".into()))
 }
 
 /// Create a new event with a caller-specified ID.
 pub async fn create_event_with_id(
-    db: &Surreal<Db>,
+    db: &NarraDb,
     id: &str,
     data: EventCreate,
 ) -> Result<Event, NarraError> {
@@ -88,7 +88,7 @@ pub async fn create_event_with_id(
 /// # Returns
 ///
 /// The event if found, None otherwise.
-pub async fn get_event(db: &Surreal<Db>, id: &str) -> Result<Option<Event>, NarraError> {
+pub async fn get_event(db: &NarraDb, id: &str) -> Result<Option<Event>, NarraError> {
     let result: Option<Event> = db.select(("event", id)).await?;
     Ok(result)
 }
@@ -105,7 +105,7 @@ pub async fn get_event(db: &Surreal<Db>, id: &str) -> Result<Option<Event>, Narr
 /// # Returns
 ///
 /// A vector of events sorted by sequence number.
-pub async fn list_events_ordered(db: &Surreal<Db>) -> Result<Vec<Event>, NarraError> {
+pub async fn list_events_ordered(db: &NarraDb) -> Result<Vec<Event>, NarraError> {
     let mut result = db
         .query("SELECT * FROM event ORDER BY sequence ASC")
         .await?;
@@ -125,7 +125,7 @@ pub async fn list_events_ordered(db: &Surreal<Db>) -> Result<Vec<Event>, NarraEr
 ///
 /// The updated event if found, None otherwise.
 pub async fn update_event(
-    db: &Surreal<Db>,
+    db: &NarraDb,
     id: &str,
     data: EventUpdate,
 ) -> Result<Option<Event>, NarraError> {
@@ -148,7 +148,7 @@ pub async fn update_event(
 ///
 /// Returns `ReferentialIntegrityViolation` if the event is referenced by other entities
 /// and cannot be deleted due to ON DELETE REJECT constraints.
-pub async fn delete_event(db: &Surreal<Db>, id: &str) -> Result<Option<Event>, NarraError> {
+pub async fn delete_event(db: &NarraDb, id: &str) -> Result<Option<Event>, NarraError> {
     match db.delete::<Option<Event>>(("event", id)).await {
         Ok(result) => Ok(result),
         Err(e) => {
@@ -187,7 +187,7 @@ struct MaxSeqResult {
 /// # Returns
 ///
 /// The next sequence number to use.
-pub async fn get_next_sequence(db: &Surreal<Db>) -> Result<i64, NarraError> {
+pub async fn get_next_sequence(db: &NarraDb) -> Result<i64, NarraError> {
     let mut result = db
         .query("SELECT math::max(sequence) AS max_seq FROM event GROUP ALL")
         .await?;
@@ -219,7 +219,7 @@ pub async fn get_next_sequence(db: &Surreal<Db>) -> Result<i64, NarraError> {
 ///
 /// Uses integer division. For very tight insertions, consider renumbering.
 pub async fn insert_event_between(
-    db: &Surreal<Db>,
+    db: &NarraDb,
     mut data: EventCreate,
     after_seq: i64,
     before_seq: i64,
@@ -247,7 +247,7 @@ pub async fn insert_event_between(
 /// # Errors
 ///
 /// Returns `NarraError::NotFound` if the reference event doesn't exist.
-pub async fn get_events_before(db: &Surreal<Db>, event_id: &str) -> Result<Vec<Event>, NarraError> {
+pub async fn get_events_before(db: &NarraDb, event_id: &str) -> Result<Vec<Event>, NarraError> {
     // First get the reference event to find its sequence number
     let reference = get_event(db, event_id).await?;
     let reference = reference.ok_or_else(|| NarraError::NotFound {
@@ -280,7 +280,7 @@ pub async fn get_events_before(db: &Surreal<Db>, event_id: &str) -> Result<Vec<E
 /// # Errors
 ///
 /// Returns `NarraError::NotFound` if the reference event doesn't exist.
-pub async fn get_events_after(db: &Surreal<Db>, event_id: &str) -> Result<Vec<Event>, NarraError> {
+pub async fn get_events_after(db: &NarraDb, event_id: &str) -> Result<Vec<Event>, NarraError> {
     // First get the reference event to find its sequence number
     let reference = get_event(db, event_id).await?;
     let reference = reference.ok_or_else(|| NarraError::NotFound {
@@ -310,7 +310,7 @@ pub async fn get_events_after(db: &Surreal<Db>, event_id: &str) -> Result<Vec<Ev
 ///
 /// A vector of events in the range, ordered by sequence ascending.
 pub async fn get_events_in_range(
-    db: &Surreal<Db>,
+    db: &NarraDb,
     from_seq: i64,
     to_seq: i64,
 ) -> Result<Vec<Event>, NarraError> {

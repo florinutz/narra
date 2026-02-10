@@ -1,6 +1,6 @@
+use crate::db::connection::NarraDb;
 use serde::{Deserialize, Serialize};
-use surrealdb::engine::local::Db;
-use surrealdb::{Datetime, RecordId, Surreal};
+use surrealdb::{Datetime, RecordId};
 
 use crate::NarraError;
 
@@ -55,7 +55,7 @@ pub struct RelationshipCreate {
 ///
 /// The created relationship.
 pub async fn create_relationship(
-    db: &Surreal<Db>,
+    db: &NarraDb,
     data: RelationshipCreate,
 ) -> Result<Relationship, NarraError> {
     let query = format!(
@@ -88,7 +88,7 @@ pub async fn create_relationship(
 ///
 /// A vector of relationships where this character is the source.
 pub async fn get_relationships_from(
-    db: &Surreal<Db>,
+    db: &NarraDb,
     character_id: &str,
 ) -> Result<Vec<Relationship>, NarraError> {
     let query = format!(
@@ -111,7 +111,7 @@ pub async fn get_relationships_from(
 ///
 /// A vector of relationships where this character is the target.
 pub async fn get_relationships_to(
-    db: &Surreal<Db>,
+    db: &NarraDb,
     character_id: &str,
 ) -> Result<Vec<Relationship>, NarraError> {
     let query = format!(
@@ -137,7 +137,7 @@ pub async fn get_relationships_to(
 ///
 /// A vector of all relationships involving this character.
 pub async fn get_all_relationships(
-    db: &Surreal<Db>,
+    db: &NarraDb,
     character_id: &str,
 ) -> Result<Vec<Relationship>, NarraError> {
     let query = format!(
@@ -160,7 +160,7 @@ pub async fn get_all_relationships(
 ///
 /// The deleted relationship if found, None otherwise.
 pub async fn delete_relationship(
-    db: &Surreal<Db>,
+    db: &NarraDb,
     id: &str,
 ) -> Result<Option<Relationship>, NarraError> {
     let result: Option<Relationship> = db.delete(("relates_to", id)).await?;

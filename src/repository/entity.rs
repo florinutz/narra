@@ -1,3 +1,4 @@
+use crate::db::connection::NarraDb;
 use crate::models::{
     Character, CharacterCreate, CharacterUpdate, Event, EventCreate, EventUpdate, Location,
     LocationCreate, LocationUpdate, Scene, SceneCreate, SceneUpdate,
@@ -6,8 +7,6 @@ use crate::NarraError;
 use async_trait::async_trait;
 use futures::stream::{self, StreamExt};
 use std::sync::Arc;
-use surrealdb::engine::local::Db;
-use surrealdb::Surreal;
 
 /// Repository trait for core entity CRUD operations.
 ///
@@ -62,12 +61,12 @@ pub trait EntityRepository: Send + Sync {
 ///
 /// Wraps the database connection and delegates to model functions.
 pub struct SurrealEntityRepository {
-    db: Arc<Surreal<Db>>,
+    db: Arc<NarraDb>,
 }
 
 impl SurrealEntityRepository {
     /// Create a new repository with the given database connection.
-    pub fn new(db: Arc<Surreal<Db>>) -> Self {
+    pub fn new(db: Arc<NarraDb>) -> Self {
         Self { db }
     }
 }

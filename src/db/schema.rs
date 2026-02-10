@@ -1,6 +1,4 @@
-use surrealdb::engine::local::Db;
-use surrealdb::Surreal;
-
+use crate::db::connection::NarraDb;
 use crate::NarraError;
 
 /// Phase 1 schema: Foundation tables (character, location, event, relates_to, knowledge)
@@ -97,7 +95,7 @@ const SCHEMA_017: &str = include_str!("migrations/017_character_facets.surql");
 /// # Ok(())
 /// # }
 /// ```
-pub async fn apply_schema(db: &Surreal<Db>) -> Result<(), NarraError> {
+pub async fn apply_schema(db: &NarraDb) -> Result<(), NarraError> {
     db.query(SCHEMA_001).await?;
     db.query(SCHEMA_002).await?;
     db.query(SCHEMA_003).await?;

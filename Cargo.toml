@@ -12,7 +12,7 @@ categories = ["command-line-utilities", "database"]
 authors = ["Florin"]
 
 [dependencies]
-surrealdb = { version = "2.6.0", features = ["kv-rocksdb"] }
+surrealdb = { version = "2.6.0", features = ["kv-rocksdb", "protocol-ws"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"

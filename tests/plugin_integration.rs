@@ -7,7 +7,7 @@
 //! - MCP tools for session management
 
 use chrono::{Duration, Utc};
-use narra::db::connection::init_db;
+use narra::db::connection::{init_db, DbConfig};
 use narra::db::schema::apply_schema;
 use narra::embedding::NoopEmbeddingService;
 use narra::mcp::tools::SessionContextRequest;
@@ -92,7 +92,16 @@ async fn test_startup_context_knows_last_work() {
     let db_path = temp_dir.path().join("test.db");
 
     // Setup database
-    let db = Arc::new(init_db(db_path.to_str().unwrap()).await.unwrap());
+    let db = Arc::new(
+        init_db(
+            &DbConfig::Embedded {
+                path: Some(db_path.to_string_lossy().into_owned()),
+            },
+            temp_dir.path(),
+        )
+        .await
+        .unwrap(),
+    );
     apply_schema(&db).await.unwrap();
     let repo = SurrealEntityRepository::new(db.clone());
 
@@ -156,7 +165,16 @@ async fn test_startup_surfaces_recent_context() {
     let db_path = temp_dir.path().join("test.db");
 
     // Setup database
-    let db = Arc::new(init_db(db_path.to_str().unwrap()).await.unwrap());
+    let db = Arc::new(
+        init_db(
+            &DbConfig::Embedded {
+                path: Some(db_path.to_string_lossy().into_owned()),
+            },
+            temp_dir.path(),
+        )
+        .await
+        .unwrap(),
+    );
     apply_schema(&db).await.unwrap();
     let repo = SurrealEntityRepository::new(db.clone());
 
@@ -219,7 +237,16 @@ async fn test_hot_entity_tracking() {
     let db_path = temp_dir.path().join("test.db");
 
     // Setup database
-    let db = Arc::new(init_db(db_path.to_str().unwrap()).await.unwrap());
+    let db = Arc::new(
+        init_db(
+            &DbConfig::Embedded {
+                path: Some(db_path.to_string_lossy().into_owned()),
+            },
+            temp_dir.path(),
+        )
+        .await
+        .unwrap(),
+    );
     apply_schema(&db).await.unwrap();
     let repo = SurrealEntityRepository::new(db.clone());
 
@@ -296,7 +323,16 @@ async fn test_startup_verbosity_by_time() {
     let db_path = temp_dir.path().join("test.db");
 
     // Setup database with data
-    let db = Arc::new(init_db(db_path.to_str().unwrap()).await.unwrap());
+    let db = Arc::new(
+        init_db(
+            &DbConfig::Embedded {
+                path: Some(db_path.to_string_lossy().into_owned()),
+            },
+            temp_dir.path(),
+        )
+        .await
+        .unwrap(),
+    );
     apply_schema(&db).await.unwrap();
     let repo = SurrealEntityRepository::new(db.clone());
 
@@ -368,7 +404,16 @@ async fn test_startup_verbosity_by_time() {
     // Test EmptyWorld: no last_session + no data
     {
         let empty_db_path = temp_dir.path().join("empty.db");
-        let empty_db = Arc::new(init_db(empty_db_path.to_str().unwrap()).await.unwrap());
+        let empty_db = Arc::new(
+            init_db(
+                &DbConfig::Embedded {
+                    path: Some(empty_db_path.to_string_lossy().into_owned()),
+                },
+                temp_dir.path(),
+            )
+            .await
+            .unwrap(),
+        );
         apply_schema(&empty_db).await.unwrap();
 
         let empty_session_path = temp_dir.path().join("empty_session.json");
@@ -388,7 +433,16 @@ async fn test_pending_decisions_surfaced() {
     let db_path = temp_dir.path().join("test.db");
 
     // Setup
-    let db = Arc::new(init_db(db_path.to_str().unwrap()).await.unwrap());
+    let db = Arc::new(
+        init_db(
+            &DbConfig::Embedded {
+                path: Some(db_path.to_string_lossy().into_owned()),
+            },
+            temp_dir.path(),
+        )
+        .await
+        .unwrap(),
+    );
     apply_schema(&db).await.unwrap();
 
     // Create session with pending decisions
@@ -440,7 +494,16 @@ async fn test_get_session_context_mcp_tool() {
     let db_path = temp_dir.path().join("test.db");
 
     // Setup database with data
-    let db = Arc::new(init_db(db_path.to_str().unwrap()).await.unwrap());
+    let db = Arc::new(
+        init_db(
+            &DbConfig::Embedded {
+                path: Some(db_path.to_string_lossy().into_owned()),
+            },
+            temp_dir.path(),
+        )
+        .await
+        .unwrap(),
+    );
     apply_schema(&db).await.unwrap();
     let repo = SurrealEntityRepository::new(db.clone());
 
@@ -502,7 +565,16 @@ async fn test_export_and_verify_structure() {
     let db_path = temp_dir.path().join("test.db");
 
     // Setup database with various entities
-    let db = Arc::new(init_db(db_path.to_str().unwrap()).await.unwrap());
+    let db = Arc::new(
+        init_db(
+            &DbConfig::Embedded {
+                path: Some(db_path.to_string_lossy().into_owned()),
+            },
+            temp_dir.path(),
+        )
+        .await
+        .unwrap(),
+    );
     apply_schema(&db).await.unwrap();
     let repo = SurrealEntityRepository::new(db.clone());
 

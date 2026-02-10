@@ -3,10 +3,10 @@
 //! Measures how entities evolve over time through embedding snapshots,
 //! compares trajectories between entities, and captures point-in-time moments.
 
+use crate::db::connection::NarraDb;
 use async_trait::async_trait;
 use serde::Serialize;
 use std::sync::Arc;
-use surrealdb::{engine::local::Db, Surreal};
 
 use crate::utils::math::{cosine_similarity, vector_subtract};
 use crate::NarraError;
@@ -152,11 +152,11 @@ pub trait ArcDataProvider: Send + Sync {
 // ---------------------------------------------------------------------------
 
 pub struct SurrealArcDataProvider {
-    db: Arc<Surreal<Db>>,
+    db: Arc<NarraDb>,
 }
 
 impl SurrealArcDataProvider {
-    pub fn new(db: Arc<Surreal<Db>>) -> Self {
+    pub fn new(db: Arc<NarraDb>) -> Self {
         Self { db }
     }
 }
@@ -292,7 +292,7 @@ pub struct ArcService {
 }
 
 impl ArcService {
-    pub fn new(db: Arc<Surreal<Db>>) -> Self {
+    pub fn new(db: Arc<NarraDb>) -> Self {
         Self {
             data: Arc::new(SurrealArcDataProvider::new(db)),
         }

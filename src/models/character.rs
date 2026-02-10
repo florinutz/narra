@@ -1,8 +1,8 @@
+use crate::db::connection::NarraDb;
 use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
 use std::collections::HashMap;
-use surrealdb::engine::local::Db;
-use surrealdb::{Datetime, RecordId, Surreal};
+use surrealdb::{Datetime, RecordId};
 
 use crate::NarraError;
 
@@ -54,7 +54,7 @@ pub struct CharacterUpdate {
 ///
 /// The created character with generated ID and timestamps.
 pub async fn create_character(
-    db: &Surreal<Db>,
+    db: &NarraDb,
     data: CharacterCreate,
 ) -> Result<Character, NarraError> {
     let result: Option<Character> = db.create("character").content(data).await?;
@@ -63,7 +63,7 @@ pub async fn create_character(
 
 /// Create a new character with a caller-specified ID.
 pub async fn create_character_with_id(
-    db: &Surreal<Db>,
+    db: &NarraDb,
     id: &str,
     data: CharacterCreate,
 ) -> Result<Character, NarraError> {
@@ -81,7 +81,7 @@ pub async fn create_character_with_id(
 /// # Returns
 ///
 /// The character if found, None otherwise.
-pub async fn get_character(db: &Surreal<Db>, id: &str) -> Result<Option<Character>, NarraError> {
+pub async fn get_character(db: &NarraDb, id: &str) -> Result<Option<Character>, NarraError> {
     let result: Option<Character> = db.select(("character", id)).await?;
     Ok(result)
 }
@@ -95,7 +95,7 @@ pub async fn get_character(db: &Surreal<Db>, id: &str) -> Result<Option<Characte
 /// # Returns
 ///
 /// A vector of all characters.
-pub async fn list_characters(db: &Surreal<Db>) -> Result<Vec<Character>, NarraError> {
+pub async fn list_characters(db: &NarraDb) -> Result<Vec<Character>, NarraError> {
     let result: Vec<Character> = db.select("character").await?;
     Ok(result)
 }
@@ -112,7 +112,7 @@ pub async fn list_characters(db: &Surreal<Db>) -> Result<Vec<Character>, NarraEr
 ///
 /// The updated character if found, None otherwise.
 pub async fn update_character(
-    db: &Surreal<Db>,
+    db: &NarraDb,
     id: &str,
     data: CharacterUpdate,
 ) -> Result<Option<Character>, NarraError> {
@@ -135,7 +135,7 @@ pub async fn update_character(
 ///
 /// Returns `ReferentialIntegrityViolation` if the character is referenced by other entities
 /// (e.g., involved in historical events) and cannot be deleted due to ON DELETE REJECT constraints.
-pub async fn delete_character(db: &Surreal<Db>, id: &str) -> Result<Option<Character>, NarraError> {
+pub async fn delete_character(db: &NarraDb, id: &str) -> Result<Option<Character>, NarraError> {
     match db.delete::<Option<Character>>(("character", id)).await {
         Ok(result) => Ok(result),
         Err(e) => {

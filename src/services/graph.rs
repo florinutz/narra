@@ -3,11 +3,11 @@
 //! Generates Mermaid diagram format for rendering in GitHub, Obsidian,
 //! and other markdown-compatible editors.
 
+use crate::db::connection::NarraDb;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
-use surrealdb::{engine::local::Db, Surreal};
 
 use crate::models::character::get_character;
 use crate::models::perception::{get_perceptions_from, get_perceptions_of};
@@ -101,11 +101,11 @@ pub trait GraphService: Send + Sync {
 
 /// SurrealDB-backed graph service implementation.
 pub struct MermaidGraphService {
-    db: Arc<Surreal<Db>>,
+    db: Arc<NarraDb>,
 }
 
 impl MermaidGraphService {
-    pub fn new(db: Arc<Surreal<Db>>) -> Self {
+    pub fn new(db: Arc<NarraDb>) -> Self {
         Self { db }
     }
 

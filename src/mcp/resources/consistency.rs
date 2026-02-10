@@ -3,9 +3,9 @@
 //! Exposes current consistency violations across all entities as a resource.
 //! This is on-demand validation (runs when resource is read).
 
+use crate::db::connection::NarraDb;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use surrealdb::{engine::local::Db, Surreal};
 
 use crate::services::consistency::{
     generate_suggested_fix, ConsistencyService, ConsistencySeverity, Violation,
@@ -67,7 +67,7 @@ impl From<&Violation> for IssueDetail {
 /// Queries all characters for timeline and relationship violations.
 /// Note: This is on-demand validation, may take a moment for large worlds.
 pub async fn get_consistency_issues_resource(
-    db: &Arc<Surreal<Db>>,
+    db: &Arc<NarraDb>,
     consistency_service: &Arc<dyn ConsistencyService>,
 ) -> Result<String, String> {
     let mut all_violations: Vec<(ConsistencySeverity, Violation)> = Vec::new();

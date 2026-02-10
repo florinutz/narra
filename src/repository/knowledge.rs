@@ -1,3 +1,4 @@
+use crate::db::connection::NarraDb;
 use crate::models::{
     CertaintyLevel, Knowledge, KnowledgeConflict, KnowledgeCreate, KnowledgeState,
     KnowledgeStateCreate, KnowledgeTransmission,
@@ -5,8 +6,6 @@ use crate::models::{
 use crate::NarraError;
 use async_trait::async_trait;
 use std::sync::Arc;
-use surrealdb::engine::local::Db;
-use surrealdb::Surreal;
 
 /// Repository trait for knowledge and knowledge state operations.
 ///
@@ -73,11 +72,11 @@ pub trait KnowledgeRepository: Send + Sync {
 
 /// SurrealDB implementation of KnowledgeRepository.
 pub struct SurrealKnowledgeRepository {
-    db: Arc<Surreal<Db>>,
+    db: Arc<NarraDb>,
 }
 
 impl SurrealKnowledgeRepository {
-    pub fn new(db: Arc<Surreal<Db>>) -> Self {
+    pub fn new(db: Arc<NarraDb>) -> Self {
         Self { db }
     }
 }

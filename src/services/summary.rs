@@ -1,3 +1,4 @@
+use crate::db::connection::NarraDb;
 use async_trait::async_trait;
 use moka::future::Cache;
 use serde::{Deserialize, Serialize};
@@ -5,8 +6,6 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::time::Duration;
-use surrealdb::engine::local::Db;
-use surrealdb::Surreal;
 
 use crate::repository::{EntityRepository, SurrealEntityRepository};
 use crate::NarraError;
@@ -124,7 +123,7 @@ pub struct CachedSummaryService {
 
 impl CachedSummaryService {
     /// Create a new cached summary service.
-    pub fn new(db: Arc<Surreal<Db>>, config: SummaryConfig) -> Self {
+    pub fn new(db: Arc<NarraDb>, config: SummaryConfig) -> Self {
         let summary_cache = Cache::builder()
             .max_capacity(10_000)
             .time_to_live(Duration::from_secs(config.cache_ttl_secs))
@@ -138,7 +137,7 @@ impl CachedSummaryService {
     }
 
     /// Create with default config.
-    pub fn with_defaults(db: Arc<Surreal<Db>>) -> Self {
+    pub fn with_defaults(db: Arc<NarraDb>) -> Self {
         Self::new(db, SummaryConfig::default())
     }
 
@@ -477,8 +476,8 @@ mod tests {
     fn make_summary_service(summary_target: usize) -> CachedSummaryService {
         CachedSummaryService {
             entity_repo: Arc::new(SurrealEntityRepository::new(Arc::new(
-                // We need a Surreal<Db> but won't use it. Use a disconnected client.
-                surrealdb::Surreal::<surrealdb::engine::local::Db>::init(),
+                // We need a NarraDb but won't use it. Use a disconnected client.
+                surrealdb::Surreal::<surrealdb::engine::any::Any>::init(),
             ))),
             summary_cache: Cache::builder().max_capacity(1).build(),
             config: SummaryConfig {

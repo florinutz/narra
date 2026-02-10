@@ -1,8 +1,8 @@
+use crate::db::connection::NarraDb;
 use crate::error::NarraError;
 use crate::session::SessionStateManager;
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
-use surrealdb::{engine::local::Db, Surreal};
 
 /// Determines how verbose the session startup context should be.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -114,7 +114,7 @@ fn format_time_ago(dt: DateTime<Utc>) -> String {
 }
 
 /// Query world entity counts from the database.
-async fn query_world_overview(db: &Surreal<Db>) -> Result<WorldOverview, NarraError> {
+async fn query_world_overview(db: &NarraDb) -> Result<WorldOverview, NarraError> {
     // Count entities of each type
     let character_count: Option<usize> = db
         .query("SELECT count() FROM character GROUP ALL")
@@ -152,7 +152,7 @@ async fn query_world_overview(db: &Surreal<Db>) -> Result<WorldOverview, NarraEr
 }
 
 /// Get entity details for hot entities.
-async fn get_hot_entity_details(db: &Surreal<Db>, entity_ids: &[String]) -> Vec<HotEntity> {
+async fn get_hot_entity_details(db: &NarraDb, entity_ids: &[String]) -> Vec<HotEntity> {
     use serde::Deserialize;
 
     let mut hot_entities = Vec::new();
@@ -196,7 +196,7 @@ async fn get_hot_entity_details(db: &Surreal<Db>, entity_ids: &[String]) -> Vec<
 /// Generate session startup context.
 pub async fn generate_startup_context(
     session_manager: &SessionStateManager,
-    db: &Surreal<Db>,
+    db: &NarraDb,
 ) -> Result<SessionStartupInfo, NarraError> {
     let last_session = session_manager.get_last_session().await;
 

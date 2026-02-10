@@ -2,6 +2,7 @@
 //!
 //! Groups entities by semantic similarity using their embeddings and K-means clustering.
 
+use crate::db::connection::NarraDb;
 use async_trait::async_trait;
 use linfa::prelude::*;
 use linfa_clustering::KMeans;
@@ -9,8 +10,6 @@ use ndarray::{Array1, Array2};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Arc;
-use surrealdb::engine::local::Db;
-use surrealdb::Surreal;
 
 use crate::services::EntityType;
 use crate::NarraError;
@@ -67,11 +66,11 @@ pub trait ClusteringDataProvider: Send + Sync {
 
 /// SurrealDB implementation of ClusteringDataProvider.
 pub struct SurrealClusteringDataProvider {
-    db: Arc<Surreal<Db>>,
+    db: Arc<NarraDb>,
 }
 
 impl SurrealClusteringDataProvider {
-    pub fn new(db: Arc<Surreal<Db>>) -> Self {
+    pub fn new(db: Arc<NarraDb>) -> Self {
         Self { db }
     }
 }
@@ -153,7 +152,7 @@ pub struct ClusteringService {
 }
 
 impl ClusteringService {
-    pub fn new(db: Arc<Surreal<Db>>) -> Self {
+    pub fn new(db: Arc<NarraDb>) -> Self {
         Self {
             data: Arc::new(SurrealClusteringDataProvider::new(db)),
         }

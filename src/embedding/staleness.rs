@@ -7,8 +7,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use surrealdb::engine::local::Db;
-use surrealdb::Surreal;
+use crate::db::connection::NarraDb;
 use tokio::time::Instant;
 use tracing::{error, info, warn};
 
@@ -29,7 +28,7 @@ use crate::NarraError;
 const REGENERATION_DEBOUNCE_SECS: u64 = 2;
 
 pub struct StalenessManager {
-    db: Arc<Surreal<Db>>,
+    db: Arc<NarraDb>,
     embedding_service: Arc<dyn EmbeddingService + Send + Sync>,
     /// Tracks in-flight regenerations to debounce rapid mutations on the same entity.
     in_flight: Arc<Mutex<HashMap<String, Instant>>>,
@@ -43,7 +42,7 @@ impl StalenessManager {
     /// * `db` - Database connection
     /// * `embedding_service` - Embedding service for generating vectors
     pub fn new(
-        db: Arc<Surreal<Db>>,
+        db: Arc<NarraDb>,
         embedding_service: Arc<dyn EmbeddingService + Send + Sync>,
     ) -> Self {
         Self {
@@ -347,7 +346,7 @@ use crate::embedding::composite::{
 
 /// Internal function to regenerate a character facet embedding.
 async fn regenerate_facet_embedding_internal(
-    db: Arc<Surreal<Db>>,
+    db: Arc<NarraDb>,
     embedding_service: Arc<dyn EmbeddingService + Send + Sync>,
     entity_id: &str,
     facet: &str,
@@ -614,7 +613,7 @@ async fn regenerate_facet_embedding_internal(
 ///
 /// Shared by spawn_regeneration and regenerate_embedding.
 async fn regenerate_embedding_internal(
-    db: Arc<Surreal<Db>>,
+    db: Arc<NarraDb>,
     embedding_service: Arc<dyn EmbeddingService + Send + Sync>,
     entity_id: &str,
     entity_type: &str,

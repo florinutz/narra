@@ -2,8 +2,9 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
-use surrealdb::engine::local::Db;
-use surrealdb::{Datetime, Surreal};
+use surrealdb::Datetime;
+
+use crate::db::connection::NarraDb;
 
 use crate::repository::{RelationshipRepository, SurrealRelationshipRepository};
 use crate::NarraError;
@@ -145,7 +146,7 @@ use uuid::Uuid;
 /// Note: In production, decisions and deferred implications would be persisted.
 /// This implementation uses in-memory storage for simplicity.
 pub struct ImpactAnalyzer {
-    db: Arc<Surreal<Db>>,
+    db: Arc<NarraDb>,
     relationship_repo: Arc<SurrealRelationshipRepository>,
     /// Protected entity IDs
     protected: RwLock<HashSet<String>>,
@@ -156,7 +157,7 @@ pub struct ImpactAnalyzer {
 }
 
 impl ImpactAnalyzer {
-    pub fn new(db: Arc<Surreal<Db>>) -> Self {
+    pub fn new(db: Arc<NarraDb>) -> Self {
         Self {
             db: db.clone(),
             relationship_repo: Arc::new(SurrealRelationshipRepository::new(db)),

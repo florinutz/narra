@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
-use surrealdb::engine::local::Db;
-use surrealdb::{RecordId, Surreal};
+use surrealdb::RecordId;
+
+use crate::db::connection::NarraDb;
 
 use crate::embedding::StalenessManager;
 use crate::mcp::types::{
@@ -38,12 +39,12 @@ use crate::models::scene::{
 use crate::NarraError;
 
 pub struct ImportService {
-    db: Arc<Surreal<Db>>,
+    db: Arc<NarraDb>,
     staleness_manager: Arc<StalenessManager>,
 }
 
 impl ImportService {
-    pub fn new(db: Arc<Surreal<Db>>, staleness_manager: Arc<StalenessManager>) -> Self {
+    pub fn new(db: Arc<NarraDb>, staleness_manager: Arc<StalenessManager>) -> Self {
         Self {
             db,
             staleness_manager,

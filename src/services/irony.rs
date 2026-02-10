@@ -7,7 +7,9 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use surrealdb::{engine::local::Db, RecordId, Surreal};
+use surrealdb::RecordId;
+
+use crate::db::connection::NarraDb;
 
 use crate::models::fact::EnforcementLevel;
 use crate::models::{Character, KnowledgeState};
@@ -202,11 +204,11 @@ pub trait IronyDataProvider: Send + Sync {
 
 /// SurrealDB implementation of IronyDataProvider.
 pub struct SurrealIronyDataProvider {
-    db: Arc<Surreal<Db>>,
+    db: Arc<NarraDb>,
 }
 
 impl SurrealIronyDataProvider {
-    pub fn new(db: Arc<Surreal<Db>>) -> Self {
+    pub fn new(db: Arc<NarraDb>) -> Self {
         Self { db }
     }
 }
@@ -432,7 +434,7 @@ pub struct IronyService {
 }
 
 impl IronyService {
-    pub fn new(db: Arc<Surreal<Db>>) -> Self {
+    pub fn new(db: Arc<NarraDb>) -> Self {
         Self {
             data: Arc::new(SurrealIronyDataProvider::new(db)),
         }

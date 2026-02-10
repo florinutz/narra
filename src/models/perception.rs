@@ -5,9 +5,9 @@
 //! levels about the other. This models real-world asymmetric relationships
 //! where what A knows about B differs from what B knows about A.
 
+use crate::db::connection::NarraDb;
 use serde::{Deserialize, Serialize};
-use surrealdb::engine::local::Db;
-use surrealdb::{Datetime, RecordId, Surreal};
+use surrealdb::{Datetime, RecordId};
 
 use crate::NarraError;
 
@@ -100,7 +100,7 @@ pub struct PerceptionUpdate {
 ///
 /// The created perception edge.
 pub async fn create_perception(
-    db: &Surreal<Db>,
+    db: &NarraDb,
     from_character_id: &str,
     to_character_id: &str,
     data: PerceptionCreate,
@@ -147,7 +147,7 @@ pub async fn create_perception(
 ///
 /// A tuple of (from->to perception, to->from perception).
 pub async fn create_perception_pair(
-    db: &Surreal<Db>,
+    db: &NarraDb,
     from_char: &str,
     to_char: &str,
     from_perspective: PerceptionCreate,
@@ -173,7 +173,7 @@ pub async fn create_perception_pair(
 ///
 /// The perception if found, None otherwise.
 pub async fn get_perception(
-    db: &Surreal<Db>,
+    db: &NarraDb,
     from_char: &str,
     to_char: &str,
 ) -> Result<Option<Perception>, NarraError> {
@@ -199,7 +199,7 @@ pub async fn get_perception(
 ///
 /// A vector of perceptions originating from this character.
 pub async fn get_perceptions_from(
-    db: &Surreal<Db>,
+    db: &NarraDb,
     character_id: &str,
 ) -> Result<Vec<Perception>, NarraError> {
     let query = format!(
@@ -224,7 +224,7 @@ pub async fn get_perceptions_from(
 ///
 /// A vector of perceptions targeting this character.
 pub async fn get_perceptions_of(
-    db: &Surreal<Db>,
+    db: &NarraDb,
     character_id: &str,
 ) -> Result<Vec<Perception>, NarraError> {
     let query = format!(
@@ -249,7 +249,7 @@ pub async fn get_perceptions_of(
 ///
 /// A vector of perceptions with the given type.
 pub async fn get_perceptions_by_type(
-    db: &Surreal<Db>,
+    db: &NarraDb,
     rel_type: &str,
 ) -> Result<Vec<Perception>, NarraError> {
     let query = "SELECT * FROM perceives WHERE $rel_type IN rel_types";
@@ -273,7 +273,7 @@ pub async fn get_perceptions_by_type(
 ///
 /// The updated perception if found, None otherwise.
 pub async fn update_perception(
-    db: &Surreal<Db>,
+    db: &NarraDb,
     id: &str,
     data: PerceptionUpdate,
 ) -> Result<Option<Perception>, NarraError> {
@@ -291,10 +291,7 @@ pub async fn update_perception(
 /// # Returns
 ///
 /// The deleted perception if found, None otherwise.
-pub async fn delete_perception(
-    db: &Surreal<Db>,
-    id: &str,
-) -> Result<Option<Perception>, NarraError> {
+pub async fn delete_perception(db: &NarraDb, id: &str) -> Result<Option<Perception>, NarraError> {
     let result: Option<Perception> = db.delete(("perceives", id)).await?;
     Ok(result)
 }

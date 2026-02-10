@@ -1,9 +1,9 @@
 //! Entity ID resolution and normalization utilities.
 
+use crate::db::connection::NarraDb;
 use anyhow::Result;
 use serde::Deserialize;
 use std::sync::Arc;
-use surrealdb::{engine::local::Db, Surreal};
 
 use crate::init::AppContext;
 use crate::services::{SearchFilter, SearchService};
@@ -96,7 +96,7 @@ struct NameResult {
 /// 2. Fuzzy search (Levenshtein) if exact returns 0 and search_service provided
 /// 3. Semantic search if fuzzy also returns 0 and search_service provided
 pub async fn resolve_by_name(
-    db: &Arc<Surreal<Db>>,
+    db: &Arc<NarraDb>,
     input: &str,
     search_service: Option<&(dyn SearchService + Send + Sync)>,
 ) -> Result<Vec<ResolvedEntity>> {
@@ -154,7 +154,7 @@ pub async fn resolve_by_name(
 }
 
 /// Exact case-insensitive name/title match across all entity tables.
-async fn exact_name_match(db: &Arc<Surreal<Db>>, input: &str) -> Result<Vec<ResolvedEntity>> {
+async fn exact_name_match(db: &Arc<NarraDb>, input: &str) -> Result<Vec<ResolvedEntity>> {
     let input_lower = input.to_lowercase();
 
     let (characters, locations, events, scenes) = tokio::join!(

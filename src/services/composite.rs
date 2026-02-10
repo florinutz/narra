@@ -1,10 +1,9 @@
 //! Composite intelligence service that orchestrates multiple analytics services
 //! into higher-level narrative insights.
 
+use crate::db::connection::NarraDb;
 use serde::Serialize;
 use std::sync::Arc;
-use surrealdb::engine::local::Db;
-use surrealdb::Surreal;
 
 use crate::models::knowledge::find_knowledge_conflicts;
 use crate::services::{
@@ -18,7 +17,7 @@ use crate::NarraError;
 /// Orchestrates multiple analytics services to produce combined insights
 /// like situation reports, character dossiers, and scene planning.
 pub struct CompositeIntelligenceService {
-    db: Arc<Surreal<Db>>,
+    db: Arc<NarraDb>,
 }
 
 // ---------------------------------------------------------------------------
@@ -295,7 +294,7 @@ struct FactConstraintRow {
 // ---------------------------------------------------------------------------
 
 impl CompositeIntelligenceService {
-    pub fn new(db: Arc<Surreal<Db>>) -> Self {
+    pub fn new(db: Arc<NarraDb>) -> Self {
         Self { db }
     }
 

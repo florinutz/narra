@@ -7,9 +7,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::db::connection::NarraDb;
 use serde::Serialize;
-use surrealdb::engine::local::Db;
-use surrealdb::Surreal;
 use tracing::info;
 
 use crate::embedding::composite::{
@@ -33,14 +32,14 @@ pub struct BackfillStats {
 
 /// Service for backfilling embeddings across all entities.
 pub struct BackfillService {
-    db: Arc<Surreal<Db>>,
+    db: Arc<NarraDb>,
     embedding_service: Arc<dyn EmbeddingService + Send + Sync>,
 }
 
 impl BackfillService {
     /// Create a new backfill service.
     pub fn new(
-        db: Arc<Surreal<Db>>,
+        db: Arc<NarraDb>,
         embedding_service: Arc<dyn EmbeddingService + Send + Sync>,
     ) -> Self {
         Self {

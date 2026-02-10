@@ -1,9 +1,8 @@
+use crate::db::connection::NarraDb;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
-use surrealdb::engine::local::Db;
-use surrealdb::Surreal;
 
 use crate::embedding::reranker::RerankerService;
 use crate::embedding::EmbeddingService;
@@ -224,7 +223,7 @@ pub trait SearchService: Send + Sync {
 
 /// SurrealDB implementation of SearchService.
 pub struct SurrealSearchService {
-    db: Arc<Surreal<Db>>,
+    db: Arc<NarraDb>,
     embedding_service: Arc<dyn EmbeddingService + Send + Sync>,
     reranker: Option<Arc<dyn RerankerService + Send + Sync>>,
 }
@@ -331,7 +330,7 @@ pub fn apply_rrf(
 
 impl SurrealSearchService {
     pub fn new(
-        db: Arc<Surreal<Db>>,
+        db: Arc<NarraDb>,
         embedding_service: Arc<dyn EmbeddingService + Send + Sync>,
     ) -> Self {
         Self {

@@ -4,11 +4,11 @@
 //! Respects asymmetric relationships - if Alice trusts Bob, that doesn't mean
 //! Bob trusts Alice. Only follows OUTGOING perceives edges for propagation.
 
+use crate::db::connection::NarraDb;
 use async_trait::async_trait;
 use serde::Serialize;
 use std::collections::{HashSet, VecDeque};
 use std::sync::Arc;
-use surrealdb::{engine::local::Db, Surreal};
 
 use crate::NarraError;
 
@@ -125,11 +125,11 @@ pub trait InfluenceDataProvider: Send + Sync {
 
 /// SurrealDB implementation of InfluenceDataProvider.
 pub struct SurrealInfluenceDataProvider {
-    db: Arc<Surreal<Db>>,
+    db: Arc<NarraDb>,
 }
 
 impl SurrealInfluenceDataProvider {
-    pub fn new(db: Arc<Surreal<Db>>) -> Self {
+    pub fn new(db: Arc<NarraDb>) -> Self {
         Self { db }
     }
 }
@@ -206,7 +206,7 @@ pub struct InfluenceService {
 }
 
 impl InfluenceService {
-    pub fn new(db: Arc<Surreal<Db>>) -> Self {
+    pub fn new(db: Arc<NarraDb>) -> Self {
         Self {
             data: Arc::new(SurrealInfluenceDataProvider::new(db)),
         }

@@ -4,12 +4,11 @@
 //! providing severity-based warnings that can block operations or allow them
 //! to proceed with user awareness.
 
+use crate::db::connection::NarraDb;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
-use surrealdb::engine::local::Db;
-use surrealdb::Surreal;
 use tokio::time::{timeout, Duration};
 
 use crate::models::event::get_event;
@@ -268,11 +267,11 @@ pub trait ConsistencyService: Send + Sync {
 
 /// Consistency checker that validates entities against universe facts.
 pub struct ConsistencyChecker {
-    db: Arc<Surreal<Db>>,
+    db: Arc<NarraDb>,
 }
 
 impl ConsistencyChecker {
-    pub fn new(db: Arc<Surreal<Db>>) -> Self {
+    pub fn new(db: Arc<NarraDb>) -> Self {
         Self { db }
     }
 

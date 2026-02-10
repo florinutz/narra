@@ -1,3 +1,4 @@
+use crate::db::connection::NarraDb;
 use crate::models::{
     Involvement, InvolvementCreate, Perception, PerceptionCreate, Relationship, RelationshipCreate,
     SceneParticipant, SceneParticipantCreate,
@@ -6,8 +7,6 @@ use crate::NarraError;
 use async_trait::async_trait;
 use std::collections::HashSet;
 use std::sync::Arc;
-use surrealdb::engine::local::Db;
-use surrealdb::Surreal;
 
 /// Repository trait for graph edge operations.
 ///
@@ -67,11 +66,11 @@ pub trait RelationshipRepository: Send + Sync {
 
 /// SurrealDB implementation of RelationshipRepository.
 pub struct SurrealRelationshipRepository {
-    db: Arc<Surreal<Db>>,
+    db: Arc<NarraDb>,
 }
 
 impl SurrealRelationshipRepository {
-    pub fn new(db: Arc<Surreal<Db>>) -> Self {
+    pub fn new(db: Arc<NarraDb>) -> Self {
         Self { db }
     }
 }

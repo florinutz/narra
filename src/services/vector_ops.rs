@@ -8,9 +8,8 @@
 
 use std::sync::Arc;
 
+use crate::db::connection::NarraDb;
 use serde::{Deserialize, Serialize};
-use surrealdb::engine::local::Db;
-use surrealdb::Surreal;
 
 use crate::utils::math::{cosine_similarity, vector_midpoint, vector_normalize, vector_subtract};
 use crate::NarraError;
@@ -84,11 +83,11 @@ pub struct MidpointResult {
 
 /// Service for embedding arithmetic operations.
 pub struct VectorOpsService {
-    db: Arc<Surreal<Db>>,
+    db: Arc<NarraDb>,
 }
 
 impl VectorOpsService {
-    pub fn new(db: Arc<Surreal<Db>>) -> Self {
+    pub fn new(db: Arc<NarraDb>) -> Self {
         Self { db }
     }
 

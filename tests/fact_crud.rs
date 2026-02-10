@@ -3,7 +3,10 @@
 //! Tests cover FACT-01 (create), FACT-02 (categorize), FACT-03 (enforcement levels),
 //! FACT-04 (update/delete) at the database level.
 
-use narra::db::{connection::init_db, schema::apply_schema};
+use narra::db::{
+    connection::{init_db, DbConfig},
+    schema::apply_schema,
+};
 use narra::models::fact::{
     create_fact, delete_fact, get_fact, list_facts, update_fact, EnforcementLevel, FactCategory,
     FactCreate, FactScope, FactUpdate, PovScope, TemporalScope,
@@ -14,9 +17,14 @@ use tempfile::tempdir;
 #[tokio::test]
 async fn test_create_fact_basic() {
     let dir = tempdir().unwrap();
-    let db = init_db(dir.path().join("test.db").to_str().unwrap())
-        .await
-        .unwrap();
+    let db = init_db(
+        &DbConfig::Embedded {
+            path: Some(dir.path().join("test.db").to_string_lossy().into_owned()),
+        },
+        dir.path(),
+    )
+    .await
+    .unwrap();
     apply_schema(&db).await.unwrap();
 
     // Create a basic fact with title and description
@@ -53,9 +61,14 @@ async fn test_create_fact_basic() {
 #[tokio::test]
 async fn test_create_fact_with_categories() {
     let dir = tempdir().unwrap();
-    let db = init_db(dir.path().join("test.db").to_str().unwrap())
-        .await
-        .unwrap();
+    let db = init_db(
+        &DbConfig::Embedded {
+            path: Some(dir.path().join("test.db").to_string_lossy().into_owned()),
+        },
+        dir.path(),
+    )
+    .await
+    .unwrap();
     apply_schema(&db).await.unwrap();
 
     // Create fact with multiple categories including Custom
@@ -89,9 +102,14 @@ async fn test_create_fact_with_categories() {
 #[tokio::test]
 async fn test_create_fact_with_scope() {
     let dir = tempdir().unwrap();
-    let db = init_db(dir.path().join("test.db").to_str().unwrap())
-        .await
-        .unwrap();
+    let db = init_db(
+        &DbConfig::Embedded {
+            path: Some(dir.path().join("test.db").to_string_lossy().into_owned()),
+        },
+        dir.path(),
+    )
+    .await
+    .unwrap();
     apply_schema(&db).await.unwrap();
 
     // Create fact with temporal + POV scope
@@ -137,9 +155,14 @@ async fn test_create_fact_with_scope() {
 #[tokio::test]
 async fn test_create_fact_with_character_pov_scope() {
     let dir = tempdir().unwrap();
-    let db = init_db(dir.path().join("test.db").to_str().unwrap())
-        .await
-        .unwrap();
+    let db = init_db(
+        &DbConfig::Embedded {
+            path: Some(dir.path().join("test.db").to_string_lossy().into_owned()),
+        },
+        dir.path(),
+    )
+    .await
+    .unwrap();
     apply_schema(&db).await.unwrap();
 
     // Create fact with character-specific POV scope
@@ -169,9 +192,14 @@ async fn test_create_fact_with_character_pov_scope() {
 #[tokio::test]
 async fn test_create_fact_with_except_characters_scope() {
     let dir = tempdir().unwrap();
-    let db = init_db(dir.path().join("test.db").to_str().unwrap())
-        .await
-        .unwrap();
+    let db = init_db(
+        &DbConfig::Embedded {
+            path: Some(dir.path().join("test.db").to_string_lossy().into_owned()),
+        },
+        dir.path(),
+    )
+    .await
+    .unwrap();
     apply_schema(&db).await.unwrap();
 
     // Create fact with exclusion POV scope
@@ -207,9 +235,14 @@ async fn test_create_fact_with_except_characters_scope() {
 #[tokio::test]
 async fn test_update_fact() {
     let dir = tempdir().unwrap();
-    let db = init_db(dir.path().join("test.db").to_str().unwrap())
-        .await
-        .unwrap();
+    let db = init_db(
+        &DbConfig::Embedded {
+            path: Some(dir.path().join("test.db").to_string_lossy().into_owned()),
+        },
+        dir.path(),
+    )
+    .await
+    .unwrap();
     apply_schema(&db).await.unwrap();
 
     // Create a fact
@@ -256,9 +289,14 @@ async fn test_update_fact() {
 #[tokio::test]
 async fn test_delete_fact() {
     let dir = tempdir().unwrap();
-    let db = init_db(dir.path().join("test.db").to_str().unwrap())
-        .await
-        .unwrap();
+    let db = init_db(
+        &DbConfig::Embedded {
+            path: Some(dir.path().join("test.db").to_string_lossy().into_owned()),
+        },
+        dir.path(),
+    )
+    .await
+    .unwrap();
     apply_schema(&db).await.unwrap();
 
     // Create a fact
@@ -292,9 +330,14 @@ async fn test_delete_fact() {
 #[tokio::test]
 async fn test_list_facts() {
     let dir = tempdir().unwrap();
-    let db = init_db(dir.path().join("test.db").to_str().unwrap())
-        .await
-        .unwrap();
+    let db = init_db(
+        &DbConfig::Embedded {
+            path: Some(dir.path().join("test.db").to_string_lossy().into_owned()),
+        },
+        dir.path(),
+    )
+    .await
+    .unwrap();
     apply_schema(&db).await.unwrap();
 
     // Create multiple facts
@@ -367,9 +410,14 @@ async fn test_fact_persistence_across_reconnect() {
     // The persistence functionality is covered by other tests like test_create_fact_basic
     // which verify data survives the full operation cycle
     let dir = tempdir().unwrap();
-    let db = init_db(dir.path().join("test.db").to_str().unwrap())
-        .await
-        .unwrap();
+    let db = init_db(
+        &DbConfig::Embedded {
+            path: Some(dir.path().join("test.db").to_string_lossy().into_owned()),
+        },
+        dir.path(),
+    )
+    .await
+    .unwrap();
     apply_schema(&db).await.unwrap();
 
     // Create a fact

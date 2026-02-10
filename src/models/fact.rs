@@ -4,11 +4,11 @@
 //! They can be linked to entities via the applies_to edge and scoped by temporal
 //! or POV context.
 
+use crate::db::connection::NarraDb;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
-use surrealdb::engine::local::Db;
-use surrealdb::{Datetime, RecordId, Surreal};
+use surrealdb::{Datetime, RecordId};
 
 use crate::NarraError;
 
@@ -198,14 +198,14 @@ pub struct FactApplication {
 /// # Returns
 ///
 /// The created fact with generated ID and timestamps.
-pub async fn create_fact(db: &Surreal<Db>, data: FactCreate) -> Result<UniverseFact, NarraError> {
+pub async fn create_fact(db: &NarraDb, data: FactCreate) -> Result<UniverseFact, NarraError> {
     let result: Option<UniverseFact> = db.create("universe_fact").content(data).await?;
     result.ok_or_else(|| NarraError::Database("Failed to create fact".into()))
 }
 
 /// Create a new universe fact with a caller-specified ID.
 pub async fn create_fact_with_id(
-    db: &Surreal<Db>,
+    db: &NarraDb,
     id: &str,
     data: FactCreate,
 ) -> Result<UniverseFact, NarraError> {
@@ -223,7 +223,7 @@ pub async fn create_fact_with_id(
 /// # Returns
 ///
 /// The fact if found, None otherwise.
-pub async fn get_fact(db: &Surreal<Db>, id: &str) -> Result<Option<UniverseFact>, NarraError> {
+pub async fn get_fact(db: &NarraDb, id: &str) -> Result<Option<UniverseFact>, NarraError> {
     let result: Option<UniverseFact> = db.select(("universe_fact", id)).await?;
     Ok(result)
 }
@@ -237,7 +237,7 @@ pub async fn get_fact(db: &Surreal<Db>, id: &str) -> Result<Option<UniverseFact>
 /// # Returns
 ///
 /// A vector of all facts ordered by creation time descending.
-pub async fn list_facts(db: &Surreal<Db>) -> Result<Vec<UniverseFact>, NarraError> {
+pub async fn list_facts(db: &NarraDb) -> Result<Vec<UniverseFact>, NarraError> {
     let mut result = db
         .query("SELECT * FROM universe_fact ORDER BY created_at DESC")
         .await?;
@@ -257,7 +257,7 @@ pub async fn list_facts(db: &Surreal<Db>) -> Result<Vec<UniverseFact>, NarraErro
 ///
 /// The updated fact if found, None otherwise.
 pub async fn update_fact(
-    db: &Surreal<Db>,
+    db: &NarraDb,
     id: &str,
     data: FactUpdate,
 ) -> Result<Option<UniverseFact>, NarraError> {
@@ -277,7 +277,7 @@ pub async fn update_fact(
 /// # Returns
 ///
 /// The deleted fact if found, None otherwise.
-pub async fn delete_fact(db: &Surreal<Db>, id: &str) -> Result<Option<UniverseFact>, NarraError> {
+pub async fn delete_fact(db: &NarraDb, id: &str) -> Result<Option<UniverseFact>, NarraError> {
     let result: Option<UniverseFact> = db.delete(("universe_fact", id)).await?;
     Ok(result)
 }
@@ -302,7 +302,7 @@ pub async fn delete_fact(db: &Surreal<Db>, id: &str) -> Result<Option<UniverseFa
 ///
 /// The created application edge.
 pub async fn link_fact_to_entity(
-    db: &Surreal<Db>,
+    db: &NarraDb,
     fact_id: &str,
     entity_id: &str,
     link_type: &str,
@@ -336,7 +336,7 @@ pub async fn link_fact_to_entity(
 ///
 /// Ok(()) if the unlinking succeeded (or edge didn't exist).
 pub async fn unlink_fact_from_entity(
-    db: &Surreal<Db>,
+    db: &NarraDb,
     fact_id: &str,
     entity_id: &str,
 ) -> Result<(), NarraError> {
@@ -359,7 +359,7 @@ pub async fn unlink_fact_from_entity(
 ///
 /// A vector of application edges for this fact.
 pub async fn get_fact_applications(
-    db: &Surreal<Db>,
+    db: &NarraDb,
     fact_id: &str,
 ) -> Result<Vec<FactApplication>, NarraError> {
     let query = format!(
@@ -382,7 +382,7 @@ pub async fn get_fact_applications(
 ///
 /// A vector of facts linked to this entity.
 pub async fn get_entity_facts(
-    db: &Surreal<Db>,
+    db: &NarraDb,
     entity_id: &str,
 ) -> Result<Vec<UniverseFact>, NarraError> {
     let query = format!(
@@ -413,10 +413,7 @@ pub async fn get_entity_facts(
 /// # Returns
 ///
 /// The number of facts linked to this entity.
-pub async fn get_fact_count_for_entity(
-    db: &Surreal<Db>,
-    entity_id: &str,
-) -> Result<usize, NarraError> {
+pub async fn get_fact_count_for_entity(db: &NarraDb, entity_id: &str) -> Result<usize, NarraError> {
     let query = format!(
         "SELECT count() AS count FROM applies_to WHERE out = {} GROUP ALL",
         entity_id
@@ -443,10 +440,7 @@ pub async fn get_fact_count_for_entity(
 /// # Returns
 ///
 /// A vector of entity IDs (as strings) linked to this fact.
-pub async fn get_entities_for_fact(
-    db: &Surreal<Db>,
-    fact_id: &str,
-) -> Result<Vec<String>, NarraError> {
+pub async fn get_entities_for_fact(db: &NarraDb, fact_id: &str) -> Result<Vec<String>, NarraError> {
     let query = format!(
         "SELECT out FROM applies_to WHERE in = universe_fact:{}",
         fact_id

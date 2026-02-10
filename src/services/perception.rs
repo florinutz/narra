@@ -4,10 +4,10 @@
 //! perspective embeddings against reality, tracking perceptual convergence
 //! and divergence over time.
 
+use crate::db::connection::NarraDb;
 use async_trait::async_trait;
 use serde::Serialize;
 use std::sync::Arc;
-use surrealdb::{engine::local::Db, Surreal};
 
 use crate::utils::math::cosine_similarity;
 use crate::NarraError;
@@ -170,11 +170,11 @@ pub trait PerceptionDataProvider: Send + Sync {
 // ---------------------------------------------------------------------------
 
 pub struct SurrealPerceptionDataProvider {
-    db: Arc<Surreal<Db>>,
+    db: Arc<NarraDb>,
 }
 
 impl SurrealPerceptionDataProvider {
-    pub fn new(db: Arc<Surreal<Db>>) -> Self {
+    pub fn new(db: Arc<NarraDb>) -> Self {
         Self { db }
     }
 }
@@ -346,7 +346,7 @@ pub struct PerceptionService {
 }
 
 impl PerceptionService {
-    pub fn new(db: Arc<Surreal<Db>>) -> Self {
+    pub fn new(db: Arc<NarraDb>) -> Self {
         Self {
             data: Arc::new(SurrealPerceptionDataProvider::new(db)),
         }

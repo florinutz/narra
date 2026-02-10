@@ -3,15 +3,14 @@
 //! Used by both `backfill.rs` and `staleness.rs` to fetch knowledge and
 //! shared-scene data when building perspective composite texts.
 
-use surrealdb::engine::local::Db;
-use surrealdb::Surreal;
+use crate::db::connection::NarraDb;
 use tracing::warn;
 
 /// Fetch observer's knowledge about a target character (text-match on target name).
 ///
 /// Returns (fact, certainty) tuples. Non-critical enrichment — returns empty vec on error.
 pub async fn fetch_knowledge_about(
-    db: &Surreal<Db>,
+    db: &NarraDb,
     observer_id: &str,
     target_name: &str,
 ) -> Vec<(String, String)> {
@@ -53,7 +52,7 @@ pub async fn fetch_knowledge_about(
 /// Uses two queries + Rust intersection. Returns (title, summary) tuples.
 /// Non-critical enrichment — returns empty vec on error.
 pub async fn fetch_shared_scenes(
-    db: &Surreal<Db>,
+    db: &NarraDb,
     observer_id: &str,
     target_id: &str,
 ) -> Vec<(String, Option<String>)> {

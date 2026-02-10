@@ -983,6 +983,177 @@ pub struct EntityResult {
 }
 
 // =============================================================================
+// Dedicated Tool Input Structs (typed JSON Schema for MCP)
+// Each struct becomes a dedicated MCP tool with full JSON Schema validation.
+// =============================================================================
+
+// --- Essential Tool Inputs ---
+
+/// Input for semantic_search tool.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SemanticSearchInput {
+    /// Natural language query (e.g., "characters who struggle with duty")
+    pub query: String,
+    /// Filter by entity types: character, location, event, scene, knowledge
+    #[serde(default)]
+    pub entity_types: Option<Vec<String>>,
+    /// Maximum results (default: 10)
+    #[serde(default)]
+    pub limit: Option<usize>,
+}
+
+/// Input for dossier tool.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct DossierInput {
+    /// Character ID (e.g., "character:alice" or just "alice")
+    pub character_id: String,
+}
+
+/// Input for scene_prep tool.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ScenePrepInput {
+    /// Character IDs for the scene (at least 2, e.g., ["character:alice", "character:bob"])
+    pub character_ids: Vec<String>,
+}
+
+/// Input for overview tool.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct OverviewInput {
+    /// Entity type: "character", "location", "event", "scene", or "all" (default: "all")
+    #[serde(default = "default_overview_type")]
+    pub entity_type: String,
+    /// Maximum results per type (default: 20)
+    #[serde(default)]
+    pub limit: Option<usize>,
+}
+
+fn default_overview_type() -> String {
+    "all".to_string()
+}
+
+/// Input for record_knowledge tool.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct RecordKnowledgeInput {
+    /// Character who learns (e.g., "character:alice" or "alice")
+    pub character_id: String,
+    /// What/who the knowledge is about (e.g., "character:bob")
+    pub target_id: String,
+    /// The fact being learned (natural language)
+    pub fact: String,
+    /// Certainty level: knows, suspects, believes_wrongly, uncertain
+    pub certainty: String,
+    /// How they learned it (e.g., "witnessed", "told_by", "overheard")
+    #[serde(default)]
+    pub method: Option<String>,
+    /// Who told them (if learned from another character)
+    #[serde(default)]
+    pub source_character_id: Option<String>,
+    /// Event where knowledge was gained
+    #[serde(default)]
+    pub event_id: Option<String>,
+}
+
+// --- Standard Tool Inputs ---
+
+/// Input for search tool (keyword).
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct KeywordSearchInput {
+    /// Search query (names, titles, keywords)
+    pub query: String,
+    /// Filter by entity types: character, location, event, scene
+    #[serde(default)]
+    pub entity_types: Option<Vec<String>>,
+    /// Maximum results (default: 10)
+    #[serde(default)]
+    pub limit: Option<usize>,
+}
+
+/// Input for lookup tool.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct LookupInput {
+    /// Entity ID (e.g., "character:alice", "event:betrayal")
+    pub entity_id: String,
+    /// Detail level: summary, standard, or full (default: summary)
+    #[serde(default)]
+    pub detail_level: Option<DetailLevel>,
+}
+
+/// Input for create_character tool.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct CreateCharacterInput {
+    /// Character name (display name)
+    pub name: String,
+    /// ID slug (e.g., "alice"). Auto-generated if omitted.
+    #[serde(default)]
+    pub id: Option<String>,
+    /// Role in the story (e.g., "protagonist", "antagonist")
+    #[serde(default)]
+    pub role: Option<String>,
+    /// Alternative names or titles
+    #[serde(default)]
+    pub aliases: Option<Vec<String>>,
+    /// Character description
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Profile: keys are categories (wound, secret, desire, contradiction), values are entry lists
+    #[serde(default)]
+    pub profile: Option<HashMap<String, Vec<String>>>,
+}
+
+/// Input for create_relationship tool.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct CreateRelationshipInput {
+    /// Source character ID (e.g., "character:alice")
+    pub from_character_id: String,
+    /// Target character ID (e.g., "character:bob")
+    pub to_character_id: String,
+    /// Relationship type (e.g., "ally", "enemy", "mentor", "rival")
+    pub rel_type: String,
+    /// Relationship subtype for finer classification
+    #[serde(default)]
+    pub subtype: Option<String>,
+    /// Human-readable label (e.g., "childhood friends")
+    #[serde(default)]
+    pub label: Option<String>,
+}
+
+/// Input for irony_report tool.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct IronyReportInput {
+    /// Focus on specific character (omit for full world report)
+    #[serde(default)]
+    pub character_id: Option<String>,
+    /// Minimum scene count since asymmetry to include (default: 3)
+    #[serde(default)]
+    pub min_scene_threshold: Option<usize>,
+}
+
+/// Input for update_entity tool.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct UpdateEntityInput {
+    /// Entity ID (e.g., "character:alice", "event:betrayal")
+    pub entity_id: String,
+    /// Fields to update (JSON object with field names and new values)
+    pub fields: serde_json::Value,
+}
+
+/// Input for knowledge_asymmetries tool.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct KnowledgeAsymmetriesInput {
+    /// First character ID (e.g., "character:alice" or "alice")
+    pub character_a: String,
+    /// Second character ID (e.g., "character:bob" or "bob")
+    pub character_b: String,
+}
+
+/// Input for validate_entity tool.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ValidateEntityInput {
+    /// Entity ID to validate (e.g., "character:alice", "scene:chapter1")
+    pub entity_id: String,
+}
+
+// =============================================================================
 // MCP Tool Input Wrappers
 // Free-form parameter pattern for MCP compatibility.
 // Top-level schema is type: "object", params are validated at runtime.

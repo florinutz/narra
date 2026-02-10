@@ -3,9 +3,9 @@
 use anyhow::Result;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use surrealdb::{engine::local::Db, Surreal};
 
-use crate::db::{connection::init_db, schema::apply_schema};
+use crate::db::connection::{init_db, load_db_config, DbConfig, NarraDb};
+use crate::db::schema::apply_schema;
 use crate::embedding::provider::{
     create_embedding_service, load_provider_config, EmbeddingMetadata, ModelMatch,
 };
@@ -24,7 +24,7 @@ use crate::session::SessionStateManager;
 ///
 /// Shared between MCP server and CLI commands.
 pub struct AppContext {
-    pub db: Arc<Surreal<Db>>,
+    pub db: Arc<NarraDb>,
     pub data_path: PathBuf,
     pub session_manager: Arc<SessionStateManager>,
     pub embedding_service: Arc<dyn EmbeddingService + Send + Sync>,
@@ -64,7 +64,16 @@ impl AppContext {
 
         tracing::info!("Using data path: {}", data_path.display());
 
-        let db = init_db(&data_path.to_string_lossy()).await?;
+        // Load DB config
+        let db_config = load_db_config(&data_path);
+        match &db_config {
+            DbConfig::Embedded { .. } => tracing::info!("Using embedded database"),
+            DbConfig::Remote { endpoint, .. } => {
+                tracing::info!("Connecting to remote database: {}", endpoint)
+            }
+        }
+
+        let db = init_db(&db_config, &data_path).await?;
         tracing::info!("Database connected");
 
         apply_schema(&db).await?;
@@ -176,7 +185,7 @@ impl AppContext {
 
 /// Check if the current embedding model matches what's stored in world_meta.
 async fn check_embedding_metadata(
-    db: &Surreal<Db>,
+    db: &NarraDb,
     embedding_service: &dyn EmbeddingService,
 ) -> ModelMatch {
     let query = "SELECT * FROM world_meta:default";
@@ -215,7 +224,7 @@ async fn check_embedding_metadata(
 
 /// Update world_meta with the current embedding model info.
 pub async fn update_embedding_metadata(
-    db: &Surreal<Db>,
+    db: &NarraDb,
     embedding_service: &dyn EmbeddingService,
 ) -> Result<(), crate::NarraError> {
     db.query(

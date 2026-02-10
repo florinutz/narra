@@ -4,9 +4,9 @@
 //! and location. They track character participation through the `participates_in`
 //! edge table and event involvement through the `involved_in` edge table.
 
+use crate::db::connection::NarraDb;
 use serde::{Deserialize, Serialize};
-use surrealdb::engine::local::Db;
-use surrealdb::{Datetime, RecordId, Surreal};
+use surrealdb::{Datetime, RecordId};
 
 use crate::NarraError;
 
@@ -66,14 +66,14 @@ pub struct SceneUpdate {
 /// # Returns
 ///
 /// The created scene with generated ID and timestamps.
-pub async fn create_scene(db: &Surreal<Db>, data: SceneCreate) -> Result<Scene, NarraError> {
+pub async fn create_scene(db: &NarraDb, data: SceneCreate) -> Result<Scene, NarraError> {
     let result: Option<Scene> = db.create("scene").content(data).await?;
     result.ok_or_else(|| NarraError::Database("Failed to create scene".into()))
 }
 
 /// Create a new scene with a caller-specified ID.
 pub async fn create_scene_with_id(
-    db: &Surreal<Db>,
+    db: &NarraDb,
     id: &str,
     data: SceneCreate,
 ) -> Result<Scene, NarraError> {
@@ -91,7 +91,7 @@ pub async fn create_scene_with_id(
 /// # Returns
 ///
 /// The scene if found, None otherwise.
-pub async fn get_scene(db: &Surreal<Db>, id: &str) -> Result<Option<Scene>, NarraError> {
+pub async fn get_scene(db: &NarraDb, id: &str) -> Result<Option<Scene>, NarraError> {
     let result: Option<Scene> = db.select(("scene", id)).await?;
     Ok(result)
 }
@@ -105,7 +105,7 @@ pub async fn get_scene(db: &Surreal<Db>, id: &str) -> Result<Option<Scene>, Narr
 /// # Returns
 ///
 /// A vector of all scenes.
-pub async fn list_scenes(db: &Surreal<Db>) -> Result<Vec<Scene>, NarraError> {
+pub async fn list_scenes(db: &NarraDb) -> Result<Vec<Scene>, NarraError> {
     let result: Vec<Scene> = db.select("scene").await?;
     Ok(result)
 }
@@ -122,7 +122,7 @@ pub async fn list_scenes(db: &Surreal<Db>) -> Result<Vec<Scene>, NarraError> {
 ///
 /// The updated scene if found, None otherwise.
 pub async fn update_scene(
-    db: &Surreal<Db>,
+    db: &NarraDb,
     id: &str,
     data: SceneUpdate,
 ) -> Result<Option<Scene>, NarraError> {
@@ -140,7 +140,7 @@ pub async fn update_scene(
 /// # Returns
 ///
 /// The deleted scene if found, None otherwise.
-pub async fn delete_scene(db: &Surreal<Db>, id: &str) -> Result<Option<Scene>, NarraError> {
+pub async fn delete_scene(db: &NarraDb, id: &str) -> Result<Option<Scene>, NarraError> {
     let result: Option<Scene> = db.delete(("scene", id)).await?;
     Ok(result)
 }
@@ -155,10 +155,7 @@ pub async fn delete_scene(db: &Surreal<Db>, id: &str) -> Result<Option<Scene>, N
 /// # Returns
 ///
 /// A vector of scenes that occur at this event.
-pub async fn get_scenes_at_event(
-    db: &Surreal<Db>,
-    event_id: &str,
-) -> Result<Vec<Scene>, NarraError> {
+pub async fn get_scenes_at_event(db: &NarraDb, event_id: &str) -> Result<Vec<Scene>, NarraError> {
     let event_ref = RecordId::from(("event", event_id));
     let mut result = db
         .query("SELECT * FROM scene WHERE event = $event_ref")
@@ -181,7 +178,7 @@ pub async fn get_scenes_at_event(
 ///
 /// A vector of scenes that take place at this location.
 pub async fn get_scenes_at_location(
-    db: &Surreal<Db>,
+    db: &NarraDb,
     location_id: &str,
 ) -> Result<Vec<Scene>, NarraError> {
     let loc_ref = RecordId::from(("location", location_id));
@@ -245,7 +242,7 @@ pub struct SceneParticipantCreate {
 ///
 /// The created participation edge.
 pub async fn add_scene_participant(
-    db: &Surreal<Db>,
+    db: &NarraDb,
     data: SceneParticipantCreate,
 ) -> Result<SceneParticipant, NarraError> {
     let query = format!(
@@ -276,7 +273,7 @@ pub async fn add_scene_participant(
 ///
 /// A vector of participation edges for this scene.
 pub async fn get_scene_participants(
-    db: &Surreal<Db>,
+    db: &NarraDb,
     scene_id: &str,
 ) -> Result<Vec<SceneParticipant>, NarraError> {
     let query = format!(
@@ -299,7 +296,7 @@ pub async fn get_scene_participants(
 ///
 /// A vector of participation edges for this character.
 pub async fn get_character_scenes(
-    db: &Surreal<Db>,
+    db: &NarraDb,
     character_id: &str,
 ) -> Result<Vec<SceneParticipant>, NarraError> {
     let query = format!(
@@ -322,7 +319,7 @@ pub async fn get_character_scenes(
 ///
 /// The deleted participation if found, None otherwise.
 pub async fn delete_scene_participant(
-    db: &Surreal<Db>,
+    db: &NarraDb,
     id: &str,
 ) -> Result<Option<SceneParticipant>, NarraError> {
     let result: Option<SceneParticipant> = db.delete(("participates_in", id)).await?;
@@ -376,7 +373,7 @@ pub struct InvolvementCreate {
 ///
 /// The created involvement edge.
 pub async fn add_event_involvement(
-    db: &Surreal<Db>,
+    db: &NarraDb,
     data: InvolvementCreate,
 ) -> Result<Involvement, NarraError> {
     let query = format!(
@@ -407,7 +404,7 @@ pub async fn add_event_involvement(
 ///
 /// A vector of involvement edges for this event.
 pub async fn get_event_characters(
-    db: &Surreal<Db>,
+    db: &NarraDb,
     event_id: &str,
 ) -> Result<Vec<Involvement>, NarraError> {
     let event_ref = RecordId::from(("event", event_id));
@@ -430,7 +427,7 @@ pub async fn get_event_characters(
 ///
 /// A vector of involvement edges for this character.
 pub async fn get_character_events(
-    db: &Surreal<Db>,
+    db: &NarraDb,
     character_id: &str,
 ) -> Result<Vec<Involvement>, NarraError> {
     let char_ref = RecordId::from(("character", character_id));
@@ -453,7 +450,7 @@ pub async fn get_character_events(
 ///
 /// The deleted involvement if found, None otherwise.
 pub async fn delete_event_involvement(
-    db: &Surreal<Db>,
+    db: &NarraDb,
     id: &str,
 ) -> Result<Option<Involvement>, NarraError> {
     let result: Option<Involvement> = db.delete(("involved_in", id)).await?;
