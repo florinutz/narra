@@ -7,8 +7,16 @@ impl NarraServer {
     pub(crate) async fn handle_arc_history(
         &self,
         entity_id: &str,
+        facet: Option<&str>,
         limit: usize,
     ) -> Result<QueryResponse, String> {
+        // If facet is specified, fetch snapshots directly with facet filter
+        if let Some(facet_name) = facet {
+            return self
+                .handle_arc_history_facet(entity_id, facet_name, limit)
+                .await;
+        }
+
         let service = ArcService::new(self.db.clone());
         let result = service
             .analyze_history(entity_id, limit)
@@ -850,6 +858,146 @@ impl NarraServer {
 
         Ok(QueryResponse {
             results,
+            total,
+            next_cursor: None,
+            hints,
+            token_estimate,
+        })
+    }
+
+    /// Handle arc history for a specific character facet.
+    async fn handle_arc_history_facet(
+        &self,
+        entity_id: &str,
+        facet: &str,
+        limit: usize,
+    ) -> Result<QueryResponse, String> {
+        // Validate facet
+        if !["identity", "psychology", "social", "narrative"].contains(&facet) {
+            return Err(format!(
+                "Invalid facet: {}. Valid: identity, psychology, social, narrative",
+                facet
+            ));
+        }
+
+        // Fetch arc snapshots with facet filter
+        let query = format!(
+            "SELECT embedding, delta_magnitude, event_id, created_at FROM arc_snapshot \
+             WHERE entity_id = $eid AND entity_type = 'character' AND facet = $facet \
+             ORDER BY created_at ASC LIMIT {}",
+            limit
+        );
+
+        let mut resp = self
+            .db
+            .query(&query)
+            .bind((
+                "eid",
+                surrealdb::RecordId::from((
+                    entity_id.split(':').next().unwrap_or("character"),
+                    entity_id.split(':').nth(1).unwrap_or(entity_id),
+                )),
+            ))
+            .bind(("facet", facet.to_string()))
+            .await
+            .map_err(|e| format!("Failed to fetch facet arc snapshots: {}", e))?;
+
+        #[derive(serde::Deserialize)]
+        struct Snapshot {
+            embedding: Vec<f32>,
+            delta_magnitude: Option<f32>,
+            event_id: Option<surrealdb::RecordId>,
+            created_at: surrealdb::Datetime,
+        }
+
+        let snapshots: Vec<Snapshot> = resp
+            .take(0)
+            .map_err(|e| format!("Failed to parse snapshots: {}", e))?;
+
+        if snapshots.is_empty() {
+            return Ok(QueryResponse {
+                results: vec![],
+                total: 0,
+                next_cursor: None,
+                hints: vec![
+                    format!("No {} facet snapshots found for {}", facet, entity_id),
+                    "Run backfill_character_facets to generate facet snapshots".to_string(),
+                ],
+                token_estimate: 0,
+            });
+        }
+
+        // Compute cumulative drift
+        let mut cumulative = 0.0;
+        let mut entity_results = Vec::new();
+
+        for (i, snap) in snapshots.iter().enumerate() {
+            let delta_str = snap
+                .delta_magnitude
+                .map(|d| {
+                    cumulative += d;
+                    format!("{:.4}", d)
+                })
+                .unwrap_or_else(|| "baseline".to_string());
+
+            let event_info = snap
+                .event_id
+                .as_ref()
+                .map(|eid| format!(" (during: {})", eid))
+                .unwrap_or_default();
+
+            let content = format!(
+                "Snapshot {}: {} facet, delta={}, cumulative={:.4}{}",
+                i + 1,
+                facet,
+                delta_str,
+                cumulative,
+                event_info
+            );
+
+            entity_results.push(EntityResult {
+                id: format!("arc_snapshot:{}:{}:{}", entity_id, facet, i),
+                entity_type: "arc_snapshot".to_string(),
+                name: format!("{} {} snapshot {}", entity_id, facet, i + 1),
+                content,
+                confidence: snap.delta_magnitude,
+                last_modified: Some(format!("{}", snap.created_at)),
+            });
+        }
+
+        // Net displacement: distance from first to last
+        let net_displacement = if snapshots.len() >= 2 {
+            1.0 - cosine_similarity(
+                &snapshots[0].embedding,
+                &snapshots.last().unwrap().embedding,
+            )
+        } else {
+            0.0
+        };
+
+        let hints = vec![
+            format!(
+                "{} {} facet snapshots for {}",
+                snapshots.len(),
+                facet,
+                entity_id
+            ),
+            format!("Net displacement: {:.4}", net_displacement),
+            format!("Cumulative drift: {:.4}", cumulative),
+            format!(
+                "Use FacetedSearch with facet={} to find similar characters",
+                facet
+            ),
+        ];
+
+        let token_estimate = entity_results
+            .iter()
+            .map(|r| r.content.len() / 4 + 30)
+            .sum();
+        let total = entity_results.len();
+
+        Ok(QueryResponse {
+            results: entity_results,
             total,
             next_cursor: None,
             hints,

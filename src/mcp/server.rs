@@ -10,7 +10,10 @@ use surrealdb::{engine::local::Db, Surreal};
 use tracing::instrument;
 
 use crate::embedding::{EmbeddingService, StalenessManager};
-use crate::mcp::prompts::{get_consistency_check_prompt, get_dramatic_irony_prompt};
+use crate::mcp::prompts::{
+    get_character_voice_prompt, get_conflict_detection_prompt, get_consistency_check_prompt,
+    get_consistency_oracle_prompt, get_dramatic_irony_prompt, get_scene_planning_prompt,
+};
 use crate::mcp::resources::{
     get_consistency_issues_resource, get_entity_resource, get_import_schema, get_import_template,
     get_session_context_resource,
@@ -311,6 +314,22 @@ Narra manages world state for fiction writing: characters, locations, events, sc
                         },
                         None,
                     ),
+                    Annotated::new(
+                        RawResource {
+                            uri: "narra://analysis/tension-matrix".to_string(),
+                            name: "Tension Matrix".to_string(),
+                            title: None,
+                            description: Some(
+                                "All character pairs with tension scores, showing the emotional landscape"
+                                    .to_string()
+                            ),
+                            mime_type: Some("application/json".to_string()),
+                            size: None,
+                            icons: None,
+                            meta: None,
+                        },
+                        None,
+                    ),
                 ],
                 next_cursor: None,
                 meta: None,
@@ -332,6 +351,21 @@ Narra manages world state for fiction writing: characters, locations, events, sc
                             description: Some(
                                 "Full entity view with attributes, relationships, and knowledge. \
                                  Types: character, location, event, scene. Example: narra://entity/character:alice"
+                                    .to_string()
+                            ),
+                            mime_type: Some("application/json".to_string()),
+                            icons: None,
+                        },
+                        None,
+                    ),
+                    Annotated::new(
+                        RawResourceTemplate {
+                            uri_template: "narra://character/{id}/dossier".to_string(),
+                            name: "Character Dossier".to_string(),
+                            title: None,
+                            description: Some(
+                                "Comprehensive character analysis: network position, knowledge, perceptions. \
+                                 Example: narra://character/alice/dossier"
                                     .to_string()
                             ),
                             mime_type: Some("application/json".to_string()),
@@ -369,6 +403,18 @@ Narra manages world state for fiction writing: characters, locations, events, sc
             self.read_import_template_resource(uri)
         } else if uri == "narra://schema/import-schema" {
             self.read_import_schema_resource(uri)
+        } else if uri == "narra://analysis/tension-matrix" {
+            self.read_tension_matrix_resource(uri).await
+        } else if let Some(rest) = uri.strip_prefix("narra://character/") {
+            if let Some(char_id) = rest.strip_suffix("/dossier") {
+                let full_id = format!("character:{}", char_id);
+                self.read_character_dossier_resource(uri, &full_id).await
+            } else {
+                Err(McpError::resource_not_found(
+                    format!("Unknown resource: {}", uri),
+                    None,
+                ))
+            }
         } else if let Some(entity_id) = uri.strip_prefix("narra://entity/") {
             self.read_entity_resource(uri, entity_id).await
         } else {
@@ -432,6 +478,89 @@ Narra manages world state for fiction writing: characters, locations, events, sc
                         },
                     ]),
                 ),
+                Prompt::new(
+                    "scene_planning",
+                    Some("Guided scene construction with pairwise dynamics, irony, and facts"),
+                    Some(vec![
+                        PromptArgument {
+                            name: "character_ids".into(),
+                            title: None,
+                            description: Some(
+                                "Comma-separated character IDs (e.g., character:alice,character:bob)"
+                                    .into(),
+                            ),
+                            required: Some(true),
+                        },
+                        PromptArgument {
+                            name: "location_id".into(),
+                            title: None,
+                            description: Some("Location for the scene".into()),
+                            required: Some(false),
+                        },
+                        PromptArgument {
+                            name: "tone".into(),
+                            title: None,
+                            description: Some(
+                                "Desired tone (e.g., tense, comedic, intimate)".into(),
+                            ),
+                            required: Some(false),
+                        },
+                    ]),
+                ),
+                Prompt::new(
+                    "character_voice",
+                    Some("Build a voice profile for consistent character dialogue"),
+                    Some(vec![
+                        PromptArgument {
+                            name: "character_id".into(),
+                            title: None,
+                            description: Some("Character ID (e.g., character:alice)".into()),
+                            required: Some(true),
+                        },
+                        PromptArgument {
+                            name: "context".into(),
+                            title: None,
+                            description: Some(
+                                "Scene or event context for the dialogue".into(),
+                            ),
+                            required: Some(false),
+                        },
+                    ]),
+                ),
+                Prompt::new(
+                    "conflict_detection",
+                    Some("Identify active and latent conflicts with escalation/resolution paths"),
+                    Some(vec![PromptArgument {
+                        name: "scope".into(),
+                        title: None,
+                        description: Some(
+                            "\"all\" for world-wide, or entity ID to focus on".into(),
+                        ),
+                        required: Some(false),
+                    }]),
+                ),
+                Prompt::new(
+                    "world_consistency_oracle",
+                    Some("Validate a proposed plot action against established world state"),
+                    Some(vec![
+                        PromptArgument {
+                            name: "proposed_action".into(),
+                            title: None,
+                            description: Some(
+                                "Natural language description of the proposed action".into(),
+                            ),
+                            required: Some(true),
+                        },
+                        PromptArgument {
+                            name: "affected_entities".into(),
+                            title: None,
+                            description: Some(
+                                "Comma-separated entity IDs that might be affected".into(),
+                            ),
+                            required: Some(false),
+                        },
+                    ]),
+                ),
             ],
             next_cursor: None,
             meta: None,
@@ -446,6 +575,10 @@ Narra manages world state for fiction writing: characters, locations, events, sc
         match request.name.as_str() {
             "check_consistency" => Ok(get_consistency_check_prompt(request.arguments)),
             "dramatic_irony" => Ok(get_dramatic_irony_prompt(request.arguments)),
+            "scene_planning" => Ok(get_scene_planning_prompt(request.arguments)),
+            "character_voice" => Ok(get_character_voice_prompt(request.arguments)),
+            "conflict_detection" => Ok(get_conflict_detection_prompt(request.arguments)),
+            "world_consistency_oracle" => Ok(get_consistency_oracle_prompt(request.arguments)),
             _ => Err(McpError::invalid_params(
                 format!("Unknown prompt: {}", request.name),
                 None,
@@ -562,6 +695,63 @@ impl NarraServer {
             contents: vec![ResourceContents::TextResourceContents {
                 uri: uri.to_string(),
                 mime_type: Some("application/json".to_string()),
+                text: content,
+                meta: None,
+            }],
+        })
+    }
+
+    async fn read_tension_matrix_resource(
+        &self,
+        uri: &str,
+    ) -> Result<ReadResourceResult, McpError> {
+        let response = self
+            .handle_tension_matrix(Some(1), Some(50))
+            .await
+            .map_err(|e| McpError::internal_error(e, None))?;
+
+        let content = response
+            .results
+            .first()
+            .map(|r| r.content.clone())
+            .unwrap_or_else(|| "No tension data".to_string());
+
+        Ok(ReadResourceResult {
+            contents: vec![ResourceContents::TextResourceContents {
+                uri: uri.to_string(),
+                mime_type: Some("text/markdown".to_string()),
+                text: content,
+                meta: None,
+            }],
+        })
+    }
+
+    async fn read_character_dossier_resource(
+        &self,
+        uri: &str,
+        character_id: &str,
+    ) -> Result<ReadResourceResult, McpError> {
+        let response = self
+            .handle_character_dossier(character_id)
+            .await
+            .map_err(|e| {
+                if e.contains("not found") {
+                    McpError::resource_not_found(e, None)
+                } else {
+                    McpError::internal_error(e, None)
+                }
+            })?;
+
+        let content = response
+            .results
+            .first()
+            .map(|r| r.content.clone())
+            .unwrap_or_else(|| "No dossier data".to_string());
+
+        Ok(ReadResourceResult {
+            contents: vec![ResourceContents::TextResourceContents {
+                uri: uri.to_string(),
+                mime_type: Some("text/markdown".to_string()),
                 text: content,
                 meta: None,
             }],

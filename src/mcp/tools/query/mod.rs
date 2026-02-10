@@ -2,10 +2,12 @@ mod query_arc;
 mod query_basic;
 mod query_composite;
 mod query_graph;
+mod query_intelligence;
 mod query_narrative;
 mod query_perception;
 mod query_search;
 mod query_validation;
+mod query_vector_ops;
 
 use crate::mcp::NarraServer;
 use crate::mcp::{EntityResult, QueryInput, QueryRequest, QueryResponse, MAX_DEPTH, MAX_LIMIT};
@@ -279,9 +281,17 @@ impl NarraServer {
                 )
                 .await
             }
-            QueryRequest::ArcHistory { entity_id, limit } => {
-                self.handle_arc_history(&entity_id, limit.unwrap_or(50).min(MAX_LIMIT))
-                    .await
+            QueryRequest::ArcHistory {
+                entity_id,
+                facet,
+                limit,
+            } => {
+                self.handle_arc_history(
+                    &entity_id,
+                    facet.as_deref(),
+                    limit.unwrap_or(50).min(MAX_LIMIT),
+                )
+                .await
             }
             QueryRequest::ArcComparison {
                 entity_id_a,
@@ -406,6 +416,41 @@ impl NarraServer {
             QueryRequest::ScenePlanning { character_ids } => {
                 self.handle_scene_planning(&character_ids).await
             }
+            QueryRequest::RerankedSearch {
+                query,
+                entity_types,
+                limit,
+            } => {
+                self.handle_reranked_search(&query, entity_types, limit)
+                    .await
+            }
+            QueryRequest::GrowthVector { entity_id, limit } => {
+                self.handle_growth_vector(&entity_id, limit).await
+            }
+            QueryRequest::MisperceptionVector {
+                observer_id,
+                target_id,
+                limit,
+            } => {
+                self.handle_misperception_vector(&observer_id, &target_id, limit)
+                    .await
+            }
+            QueryRequest::ConvergenceAnalysis {
+                entity_a,
+                entity_b,
+                window,
+            } => {
+                self.handle_convergence_analysis(&entity_a, &entity_b, window)
+                    .await
+            }
+            QueryRequest::SemanticMidpoint {
+                entity_a,
+                entity_b,
+                limit,
+            } => {
+                self.handle_semantic_midpoint(&entity_a, &entity_b, limit)
+                    .await
+            }
             QueryRequest::AnalyzeImpact {
                 entity_id,
                 proposed_change,
@@ -413,6 +458,42 @@ impl NarraServer {
             } => {
                 self.handle_analyze_impact_query(&entity_id, proposed_change, include_details)
                     .await
+            }
+            QueryRequest::TensionMatrix { min_tension, limit } => {
+                self.handle_tension_matrix(min_tension, limit).await
+            }
+            QueryRequest::KnowledgeGapAnalysis { character_id } => {
+                self.handle_knowledge_gap_analysis(&character_id).await
+            }
+            QueryRequest::RelationshipStrengthMap {
+                character_id,
+                limit,
+            } => {
+                self.handle_relationship_strength_map(&character_id, limit)
+                    .await
+            }
+            QueryRequest::NarrativeThreads { status, limit } => {
+                self.handle_narrative_threads(status.as_deref(), limit)
+                    .await
+            }
+            QueryRequest::CharacterVoice { character_id } => {
+                self.handle_character_voice(&character_id).await
+            }
+            QueryRequest::FacetedSearch {
+                query,
+                facet,
+                limit,
+            } => self.handle_faceted_search(&query, &facet, limit).await,
+            QueryRequest::MultiFacetSearch {
+                query,
+                weights,
+                limit,
+            } => {
+                self.handle_multi_facet_search(&query, &weights, limit)
+                    .await
+            }
+            QueryRequest::CharacterFacets { character_id } => {
+                self.handle_character_facets(&character_id).await
             }
         }
     }

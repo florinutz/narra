@@ -38,6 +38,7 @@ pub struct LocalEmbeddingService {
     model: Option<Arc<Mutex<TextEmbedding>>>,
     available: bool,
     dimensions: usize,
+    model_id: String,
 }
 
 impl LocalEmbeddingService {
@@ -54,10 +55,10 @@ impl LocalEmbeddingService {
     ///
     /// A new LocalEmbeddingService instance (may be unavailable if model load failed).
     pub fn new(config: EmbeddingConfig) -> Result<Self, NarraError> {
-        // Determine dimensions before moving config.model
-        let dimensions = match config.model {
-            EmbeddingModel::BGESmallENV15 => 384,
-            _ => 384, // Default to 384 for now
+        // Determine dimensions and model_id before moving config.model
+        let (dimensions, model_id) = match config.model {
+            EmbeddingModel::BGESmallENV15 => (384, "bge-small-en-v1.5".to_string()),
+            _ => (384, format!("{:?}", config.model)),
         };
 
         let mut init_options = InitOptions::new(config.model)
@@ -72,6 +73,7 @@ impl LocalEmbeddingService {
                 model: Some(Arc::new(Mutex::new(embedding))),
                 available: true,
                 dimensions,
+                model_id,
             }),
             Err(e) => {
                 warn!(
@@ -81,7 +83,8 @@ impl LocalEmbeddingService {
                 Ok(Self {
                     model: None,
                     available: false,
-                    dimensions, // Use same dimensions even when unavailable
+                    dimensions,
+                    model_id,
                 })
             }
         }
@@ -161,5 +164,13 @@ impl EmbeddingService for LocalEmbeddingService {
 
     fn is_available(&self) -> bool {
         self.available
+    }
+
+    fn model_id(&self) -> &str {
+        &self.model_id
+    }
+
+    fn provider_name(&self) -> &str {
+        "fastembed"
     }
 }

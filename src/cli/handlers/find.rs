@@ -30,11 +30,58 @@ pub async fn handle_find(
     query: &str,
     keyword_only: bool,
     semantic_only: bool,
+    rerank: bool,
+    facet: Option<&str>,
     no_semantic: bool,
     entity_type: Option<&str>,
     limit: usize,
     mode: OutputMode,
 ) -> Result<()> {
+    // Faceted search overrides other modes
+    if let Some(facet_name) = facet {
+        if !ctx.embedding_service.is_available() {
+            anyhow::bail!("Faceted search unavailable — embedding model not loaded. Run 'narra world backfill' first.");
+        }
+
+        let filter = SearchFilter {
+            limit: Some(limit),
+            ..Default::default()
+        };
+
+        let results = ctx
+            .search_service
+            .faceted_search(query, facet_name, filter)
+            .await?;
+
+        if mode == OutputMode::Json {
+            output_json_list(&results);
+            return Ok(());
+        }
+
+        println!(
+            "Faceted search ({} facet) for '{}': {} results\n",
+            facet_name,
+            query,
+            results.len()
+        );
+
+        let rows: Vec<Vec<String>> = results
+            .iter()
+            .map(|r| vec![r.id.clone(), r.name.clone(), format!("{:.4}", r.score)])
+            .collect();
+
+        print_table(&["ID", "Name", "Score"], rows);
+
+        if results.is_empty() {
+            print_hint(&format!(
+                "No characters found matching '{}' on {} facet. Try a different facet or query.",
+                query, facet_name
+            ));
+        }
+
+        return Ok(());
+    }
+
     let entity_types = match entity_type {
         Some(t) => {
             if let Some(et) = parse_entity_type(t) {
@@ -62,6 +109,9 @@ pub async fn handle_find(
     } else if semantic_only {
         let r = ctx.search_service.semantic_search(query, filter).await?;
         (r, "semantic")
+    } else if rerank {
+        let r = ctx.search_service.reranked_search(query, filter).await?;
+        (r, "reranked")
     } else {
         // Default: hybrid (auto-falls back to keyword if embeddings unavailable)
         let has_embeddings = ctx.embedding_service.is_available();

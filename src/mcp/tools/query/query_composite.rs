@@ -68,6 +68,57 @@ impl NarraServer {
         // Themes
         content_parts.push(format!("\n## Themes: {} clusters", report.theme_count));
 
+        // Narrative momentum
+        content_parts.push("\n## Narrative Momentum".to_string());
+        let momentum_label = match &report.narrative_momentum {
+            crate::services::NarrativeMomentum::Accelerating { reason } => {
+                format!("**Accelerating** — {}", reason)
+            }
+            crate::services::NarrativeMomentum::Stalling { reason } => {
+                format!("**Stalling** — {}", reason)
+            }
+            crate::services::NarrativeMomentum::Climactic { reason } => {
+                format!("**Climactic** — {}", reason)
+            }
+        };
+        content_parts.push(momentum_label);
+
+        // Unresolved threads
+        if !report.unresolved_threads.is_empty() {
+            content_parts.push(format!(
+                "\n## Unresolved Threads ({})",
+                report.unresolved_threads.len()
+            ));
+            for thread in &report.unresolved_threads {
+                let age_tag = thread
+                    .age_estimate
+                    .as_ref()
+                    .map(|a| format!(" [{}]", a))
+                    .unwrap_or_default();
+                content_parts.push(format!(
+                    "- **{}**: {}{}",
+                    thread.thread_type, thread.description, age_tag
+                ));
+            }
+        }
+
+        // Character arc summaries
+        if !report.character_arc_summaries.is_empty() {
+            content_parts.push(format!(
+                "\n## Character Arc Activity (top {})",
+                report.character_arc_summaries.len()
+            ));
+            for arc in &report.character_arc_summaries {
+                content_parts.push(format!(
+                    "- {}: {} ({} snapshots, recent drift: {:.2})",
+                    arc.character_name,
+                    arc.arc_status,
+                    arc.snapshot_count,
+                    arc.recent_drift.unwrap_or(0.0)
+                ));
+            }
+        }
+
         // Suggestions
         if !report.suggestions.is_empty() {
             content_parts.push("\n## Narrative Suggestions".to_string());
@@ -160,6 +211,47 @@ impl NarraServer {
             ));
         }
 
+        // Arc trajectory
+        if let Some(arc) = &dossier.arc_trajectory {
+            content_parts.push("\n## Arc Trajectory".to_string());
+            content_parts.push(format!(
+                "- Direction: {} (total drift: {:.2})",
+                arc.direction, arc.total_drift
+            ));
+            content_parts.push(format!("- Snapshots: {}", arc.snapshot_count));
+            if let Some(event) = &arc.most_recent_event {
+                content_parts.push(format!("- Most recent event: {}", event));
+            }
+        }
+
+        // Relationship map
+        if !dossier.relationship_map.is_empty() {
+            content_parts.push(format!(
+                "\n## Relationships ({})",
+                dossier.relationship_map.len()
+            ));
+            for rel in &dossier.relationship_map {
+                let tension_str = rel
+                    .tension
+                    .map(|t| format!(", tension: {}", t))
+                    .unwrap_or_default();
+                content_parts.push(format!(
+                    "- {} ({}){}",
+                    rel.other_name, rel.rel_type, tension_str
+                ));
+            }
+        }
+
+        // Knowledge inventory
+        content_parts.push("\n## Knowledge Inventory".to_string());
+        let inv = &dossier.knowledge_inventory;
+        content_parts.push(format!(
+            "- Knows: {} | Suspects: {} | BelievesWrongly: {} | Uncertain: {} | Other: {}",
+            inv.knows, inv.suspects, inv.believes_wrongly, inv.uncertain, inv.other
+        ));
+        let total = inv.knows + inv.suspects + inv.believes_wrongly + inv.uncertain + inv.other;
+        content_parts.push(format!("- Total knowledge states: {}", total));
+
         // Suggestions
         if !dossier.suggestions.is_empty() {
             content_parts.push("\n## Suggestions".to_string());
@@ -251,6 +343,34 @@ impl NarraServer {
             content_parts.push("\n## Opportunities".to_string());
             for o in &plan.opportunities {
                 content_parts.push(format!("- {}", o));
+            }
+        }
+
+        // Knowledge reveals
+        if !plan.knowledge_reveals.is_empty() {
+            content_parts.push(format!(
+                "\n## Knowledge Reveal Opportunities ({})",
+                plan.knowledge_reveals.len()
+            ));
+            for reveal in &plan.knowledge_reveals {
+                content_parts.push(format!(
+                    "- {} could reveal \"{}\" to {} (potential: {:.1})",
+                    reveal.revealer, reveal.fact, reveal.learner, reveal.dramatic_potential
+                ));
+            }
+        }
+
+        // Fact constraints
+        if !plan.fact_constraints.is_empty() {
+            content_parts.push(format!(
+                "\n## Universe Fact Constraints ({})",
+                plan.fact_constraints.len()
+            ));
+            for constraint in &plan.fact_constraints {
+                content_parts.push(format!(
+                    "- [{}] {}: {}",
+                    constraint.enforcement_level, constraint.title, constraint.relevance
+                ));
             }
         }
 

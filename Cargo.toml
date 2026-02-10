@@ -42,6 +42,7 @@ comfy-table = "7.1"
 serde_yaml_ng = "0.10"
 indicatif = "0.17"
 clap_complete = "4.5"
+toml = "0.8"
 
 [features]
 surrealdb3 = []

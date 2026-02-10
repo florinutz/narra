@@ -2,6 +2,8 @@
 //!
 //! Generates embeddings for all entities that are missing them or have stale embeddings.
 
+#![allow(clippy::needless_borrows_for_generic_args)]
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -11,8 +13,9 @@ use surrealdb::Surreal;
 use tracing::info;
 
 use crate::embedding::composite::{
-    character_composite, event_composite, knowledge_composite, location_composite,
-    perspective_composite, relationship_composite, scene_composite,
+    character_composite, event_composite, identity_composite, knowledge_composite,
+    location_composite, narrative_composite, perspective_composite, psychology_composite,
+    relationship_composite, scene_composite, social_composite,
 };
 use crate::embedding::EmbeddingService;
 use crate::models::{Character, Event, Location, Scene};
@@ -190,6 +193,26 @@ impl BackfillService {
             "Backfill complete: {} total, {} embedded, {} skipped, {} failed",
             stats.total_entities, stats.embedded, stats.skipped, stats.failed
         );
+
+        // Backfill character facets (identity, psychology, social, narrative)
+        let facet_stats = self.backfill_character_facets().await?;
+        stats.total_entities += facet_stats.total_entities;
+        stats.embedded += facet_stats.embedded;
+        stats.skipped += facet_stats.skipped;
+        stats.failed += facet_stats.failed;
+        stats
+            .entity_type_stats
+            .insert("character_facets".to_string(), facet_stats.embedded);
+
+        // Update world_meta with current embedding model info
+        if stats.embedded > 0 {
+            if let Err(e) =
+                crate::init::update_embedding_metadata(&self.db, self.embedding_service.as_ref())
+                    .await
+            {
+                tracing::warn!("Failed to update embedding metadata: {}", e);
+            }
+        }
 
         Ok(stats)
     }
@@ -488,6 +511,346 @@ impl BackfillService {
         Ok(())
     }
 
+    /// Backfill character facet embeddings (identity, psychology, social, narrative).
+    ///
+    /// Processes characters where any facet is stale or missing.
+    /// Pre-fetches all necessary data in bulk to avoid N+1 queries.
+    ///
+    /// # Returns
+    ///
+    /// BackfillStats for facet embeddings.
+    pub async fn backfill_character_facets(&self) -> Result<BackfillStats, NarraError> {
+        // Check embedding service is available
+        if !self.embedding_service.is_available() {
+            return Err(NarraError::Database(
+                "Embedding service not available - cannot backfill facets".to_string(),
+            ));
+        }
+
+        info!("Backfilling character facet embeddings");
+
+        let mut stats = BackfillStats::default();
+
+        // Query characters where ANY facet is stale or missing
+        let query = r#"
+            SELECT * FROM character
+            WHERE identity_embedding IS NONE OR identity_stale = true
+               OR psychology_embedding IS NONE OR psychology_stale = true
+               OR social_embedding IS NONE OR social_stale = true
+               OR narrative_embedding IS NONE OR narrative_stale = true
+        "#;
+        let mut response = self.db.query(query).await?;
+        let characters: Vec<Character> = response.take(0)?;
+
+        stats.total_entities = characters.len();
+
+        if characters.is_empty() {
+            info!("No character facets need backfill");
+            return Ok(stats);
+        }
+
+        info!("Backfilling facets for {} characters", characters.len());
+
+        // Bulk pre-fetch all data needed for facet composites
+        let all_relationships = self.get_all_character_relationships().await?;
+        // Note: outbound perceptions not used for facets (only in general composite)
+        let all_perceptions_in = self.get_all_character_inbound_perceptions().await?; // inbound (NEW)
+        let all_scene_participation = self.get_all_character_scenes().await?;
+        let all_knowledge = self.get_all_character_knowledge().await?;
+
+        // Process characters in chunks of 50
+        for chunk in characters.chunks(50) {
+            // Build composites for each facet
+            let mut identity_texts = Vec::new();
+            let mut identity_ids = Vec::new();
+            let mut identity_needs_update = Vec::new();
+
+            let mut psychology_texts = Vec::new();
+            let mut psychology_ids = Vec::new();
+            let mut psychology_needs_update = Vec::new();
+
+            let mut social_texts = Vec::new();
+            let mut social_ids = Vec::new();
+            let mut social_needs_update = Vec::new();
+
+            let mut narrative_texts = Vec::new();
+            let mut narrative_ids = Vec::new();
+            let mut narrative_needs_update = Vec::new();
+
+            for character in chunk {
+                let char_id = character.id.to_string();
+
+                // Check which facets need updates
+                let needs_identity = {
+                    let query_result = self
+                        .db
+                        .query(&format!(
+                            "SELECT identity_embedding, identity_stale FROM {}",
+                            char_id
+                        ))
+                        .await;
+
+                    #[derive(serde::Deserialize)]
+                    struct FacetCheck {
+                        identity_embedding: Option<Vec<f32>>,
+                        identity_stale: Option<bool>,
+                    }
+
+                    match query_result {
+                        Ok(mut resp) => {
+                            let check: Option<FacetCheck> = resp.take(0).unwrap_or(None);
+                            check.is_none_or(|c| {
+                                c.identity_embedding.is_none() || c.identity_stale.unwrap_or(false)
+                            })
+                        }
+                        Err(_) => true,
+                    }
+                };
+
+                if needs_identity {
+                    identity_texts.push(identity_composite(character));
+                    identity_ids.push(char_id.clone());
+                    identity_needs_update.push(char_id.clone());
+                }
+
+                // Psychology facet
+                let needs_psychology = {
+                    let query_result = self
+                        .db
+                        .query(&format!(
+                            "SELECT psychology_embedding, psychology_stale FROM {}",
+                            char_id
+                        ))
+                        .await;
+
+                    #[derive(serde::Deserialize)]
+                    struct FacetCheck {
+                        psychology_embedding: Option<Vec<f32>>,
+                        psychology_stale: Option<bool>,
+                    }
+
+                    match query_result {
+                        Ok(mut resp) => {
+                            let check: Option<FacetCheck> = resp.take(0).unwrap_or(None);
+                            check.is_none_or(|c| {
+                                c.psychology_embedding.is_none()
+                                    || c.psychology_stale.unwrap_or(false)
+                            })
+                        }
+                        Err(_) => true,
+                    }
+                };
+
+                if needs_psychology {
+                    psychology_texts.push(psychology_composite(character));
+                    psychology_ids.push(char_id.clone());
+                    psychology_needs_update.push(char_id.clone());
+                }
+
+                // Social facet
+                let needs_social = {
+                    let query_result = self
+                        .db
+                        .query(&format!(
+                            "SELECT social_embedding, social_stale FROM {}",
+                            char_id
+                        ))
+                        .await;
+
+                    #[derive(serde::Deserialize)]
+                    struct FacetCheck {
+                        social_embedding: Option<Vec<f32>>,
+                        social_stale: Option<bool>,
+                    }
+
+                    match query_result {
+                        Ok(mut resp) => {
+                            let check: Option<FacetCheck> = resp.take(0).unwrap_or(None);
+                            check.is_none_or(|c| {
+                                c.social_embedding.is_none() || c.social_stale.unwrap_or(false)
+                            })
+                        }
+                        Err(_) => true,
+                    }
+                };
+
+                if needs_social {
+                    let relationships =
+                        all_relationships.get(&char_id).cloned().unwrap_or_default();
+                    let perceptions_in = all_perceptions_in
+                        .get(&char_id)
+                        .cloned()
+                        .unwrap_or_default();
+                    social_texts.push(social_composite(character, &relationships, &perceptions_in));
+                    social_ids.push(char_id.clone());
+                    social_needs_update.push(char_id.clone());
+                }
+
+                // Narrative facet
+                let needs_narrative = {
+                    let query_result = self
+                        .db
+                        .query(&format!(
+                            "SELECT narrative_embedding, narrative_stale FROM {}",
+                            char_id
+                        ))
+                        .await;
+
+                    #[derive(serde::Deserialize)]
+                    struct FacetCheck {
+                        narrative_embedding: Option<Vec<f32>>,
+                        narrative_stale: Option<bool>,
+                    }
+
+                    match query_result {
+                        Ok(mut resp) => {
+                            let check: Option<FacetCheck> = resp.take(0).unwrap_or(None);
+                            check.is_none_or(|c| {
+                                c.narrative_embedding.is_none()
+                                    || c.narrative_stale.unwrap_or(false)
+                            })
+                        }
+                        Err(_) => true,
+                    }
+                };
+
+                if needs_narrative {
+                    let scenes = all_scene_participation
+                        .get(&char_id)
+                        .cloned()
+                        .unwrap_or_default();
+                    let knowledge = all_knowledge.get(&char_id).cloned().unwrap_or_default();
+                    narrative_texts.push(narrative_composite(&character.name, &scenes, &knowledge));
+                    narrative_ids.push(char_id.clone());
+                    narrative_needs_update.push(char_id);
+                }
+            }
+
+            // Embed each facet batch
+            if !identity_texts.is_empty() {
+                self.embed_and_update_facet_batch(
+                    &identity_ids,
+                    &identity_texts,
+                    "identity",
+                    &mut stats,
+                )
+                .await?;
+            }
+
+            if !psychology_texts.is_empty() {
+                self.embed_and_update_facet_batch(
+                    &psychology_ids,
+                    &psychology_texts,
+                    "psychology",
+                    &mut stats,
+                )
+                .await?;
+            }
+
+            if !social_texts.is_empty() {
+                self.embed_and_update_facet_batch(&social_ids, &social_texts, "social", &mut stats)
+                    .await?;
+            }
+
+            if !narrative_texts.is_empty() {
+                self.embed_and_update_facet_batch(
+                    &narrative_ids,
+                    &narrative_texts,
+                    "narrative",
+                    &mut stats,
+                )
+                .await?;
+            }
+        }
+
+        info!(
+            "Backfilled character facets: {} embedded, {} skipped, {} failed",
+            stats.embedded, stats.skipped, stats.failed
+        );
+
+        Ok(stats)
+    }
+
+    /// Embed a batch of facet texts and update their entities in the database.
+    async fn embed_and_update_facet_batch(
+        &self,
+        entity_ids: &[String],
+        texts: &[String],
+        facet: &str,
+        stats: &mut BackfillStats,
+    ) -> Result<(), NarraError> {
+        match self.embedding_service.embed_batch(texts).await {
+            Ok(embeddings) => {
+                for (i, entity_id) in entity_ids.iter().enumerate() {
+                    let update_query = format!(
+                        "UPDATE {} SET {}_embedding = $embedding, {}_stale = false, {}_composite = $composite_text",
+                        entity_id, facet, facet, facet
+                    );
+
+                    match self
+                        .db
+                        .query(&update_query)
+                        .bind(("embedding", embeddings[i].clone()))
+                        .bind(("composite_text", texts[i].clone()))
+                        .await
+                    {
+                        Ok(_) => {
+                            stats.embedded += 1;
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                "Failed to update {} facet for {}: {}",
+                                facet,
+                                entity_id,
+                                e
+                            );
+                            stats.failed += 1;
+                        }
+                    }
+
+                    // Create arc snapshot for this facet
+                    if let Err(e) = self
+                        .db
+                        .query(
+                            "CREATE arc_snapshot SET entity_id = $eid, entity_type = 'character', \
+                             facet = $facet, embedding = $snap_embedding, delta_magnitude = NONE",
+                        )
+                        .bind((
+                            "eid",
+                            surrealdb::RecordId::from((
+                                entity_id.split(':').next().unwrap_or("character"),
+                                entity_id.split(':').nth(1).unwrap_or("unknown"),
+                            )),
+                        ))
+                        .bind(("facet", facet.to_string()))
+                        .bind(("snap_embedding", embeddings[i].clone()))
+                        .await
+                    {
+                        tracing::warn!(
+                            "Failed to create arc snapshot for {} facet {}: {}",
+                            facet,
+                            entity_id,
+                            e
+                        );
+                    }
+                }
+
+                if stats.embedded.is_multiple_of(50) && stats.embedded > 0 {
+                    info!("Backfilled {} character facets so far", stats.embedded);
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to generate embeddings for {} facet batch: {}",
+                    facet,
+                    e
+                );
+                stats.failed += entity_ids.len();
+            }
+        }
+        Ok(())
+    }
+
     /// Backfill relationship (relates_to) embeddings.
     async fn backfill_relationships(&self, stats: &mut BackfillStats) -> Result<(), NarraError> {
         let query = r#"SELECT id, rel_type, subtype, label,
@@ -633,5 +996,94 @@ impl BackfillService {
         target_id: &str,
     ) -> Vec<(String, Option<String>)> {
         crate::embedding::queries::fetch_shared_scenes(&self.db, observer_id, target_id).await
+    }
+
+    /// Bulk-fetch inbound perceptions for all characters (how others see them).
+    /// Returns map of character_id -> Vec<(observer_name, perception_text)>
+    async fn get_all_character_inbound_perceptions(
+        &self,
+    ) -> Result<HashMap<String, Vec<(String, String)>>, NarraError> {
+        let query =
+            "SELECT type::string(out) AS char_id, in.name AS observer_name, perception FROM perceives";
+        let mut response = self.db.query(query).await?;
+
+        #[derive(serde::Deserialize)]
+        struct PercRecord {
+            char_id: Option<String>,
+            observer_name: Option<String>,
+            perception: Option<String>,
+        }
+
+        let records: Vec<PercRecord> = response.take(0).unwrap_or_default();
+        let mut map: HashMap<String, Vec<(String, String)>> = HashMap::new();
+
+        for r in records {
+            if let (Some(char_id), Some(observer), Some(text)) =
+                (r.char_id, r.observer_name, r.perception)
+            {
+                map.entry(char_id).or_default().push((observer, text));
+            }
+        }
+
+        Ok(map)
+    }
+
+    /// Bulk-fetch scene participation for all characters.
+    /// Returns map of character_id -> Vec<(scene_title, optional_summary)>
+    async fn get_all_character_scenes(
+        &self,
+    ) -> Result<HashMap<String, Vec<(String, Option<String>)>>, NarraError> {
+        let query = r#"SELECT type::string(in) AS char_id, out.title AS scene_title,
+                              out.summary AS scene_summary FROM participates_in"#;
+        let mut response = self.db.query(query).await?;
+
+        #[derive(serde::Deserialize)]
+        struct SceneRecord {
+            char_id: Option<String>,
+            scene_title: Option<String>,
+            scene_summary: Option<String>,
+        }
+
+        let records: Vec<SceneRecord> = response.take(0).unwrap_or_default();
+        let mut map: HashMap<String, Vec<(String, Option<String>)>> = HashMap::new();
+
+        for r in records {
+            if let (Some(char_id), Some(title)) = (r.char_id, r.scene_title) {
+                map.entry(char_id)
+                    .or_default()
+                    .push((title, r.scene_summary));
+            }
+        }
+
+        Ok(map)
+    }
+
+    /// Bulk-fetch knowledge for all characters.
+    /// Returns map of character_id -> Vec<(fact, certainty)>
+    async fn get_all_character_knowledge(
+        &self,
+    ) -> Result<HashMap<String, Vec<(String, String)>>, NarraError> {
+        let query = r#"SELECT type::string(in) AS char_id, out.fact AS fact, certainty
+                       FROM knows WHERE out.fact IS NOT NONE ORDER BY learned_at DESC"#;
+        let mut response = self.db.query(query).await?;
+
+        #[derive(serde::Deserialize)]
+        struct KnowledgeRecord {
+            char_id: Option<String>,
+            fact: Option<String>,
+            certainty: Option<String>,
+        }
+
+        let records: Vec<KnowledgeRecord> = response.take(0).unwrap_or_default();
+        let mut map: HashMap<String, Vec<(String, String)>> = HashMap::new();
+
+        for r in records {
+            if let (Some(char_id), Some(fact)) = (r.char_id, r.fact) {
+                let certainty = r.certainty.unwrap_or_else(|| "knows".to_string());
+                map.entry(char_id).or_default().push((fact, certainty));
+            }
+        }
+
+        Ok(map)
     }
 }

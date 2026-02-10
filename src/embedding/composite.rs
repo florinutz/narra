@@ -376,6 +376,185 @@ pub fn relationship_composite(
     parts.join(". ") + "."
 }
 
+/// Generate identity facet composite for a character.
+///
+/// Covers: name, roles, aliases (~15-30 words).
+/// Provides stable, core identity that rarely changes.
+///
+/// # Arguments
+///
+/// * `character` - The character entity
+///
+/// # Returns
+///
+/// A natural-language composite text for the identity facet.
+pub fn identity_composite(character: &Character) -> String {
+    let mut parts = Vec::new();
+
+    // Name and roles
+    if !character.roles.is_empty() {
+        parts.push(format!(
+            "{} is a {}",
+            character.name,
+            character.roles.join(", ")
+        ));
+    } else {
+        parts.push(format!("{} is a character", character.name));
+    }
+
+    // Aliases
+    if !character.aliases.is_empty() {
+        parts.push(format!("Also known as {}", character.aliases.join(", ")));
+    }
+
+    parts.join(". ") + "."
+}
+
+/// Generate psychology facet composite for a character.
+///
+/// Covers: profile categories only (wound, desire_conscious, desire_unconscious,
+/// contradiction, secret, etc.).
+/// Provides psychological depth without social or narrative context.
+///
+/// # Arguments
+///
+/// * `character` - The character entity
+///
+/// # Returns
+///
+/// A natural-language composite text for the psychology facet.
+pub fn psychology_composite(character: &Character) -> String {
+    if character.profile.is_empty() {
+        return format!("{} has no defined psychological profile.", character.name);
+    }
+
+    let mut parts = Vec::new();
+    parts.push(format!("{}'s psychology", character.name));
+
+    // Profile sections — iterate sorted keys for deterministic output
+    let mut profile_keys: Vec<&String> = character.profile.keys().collect();
+    profile_keys.sort();
+    for key in profile_keys {
+        if let Some(entries) = character.profile.get(key) {
+            if !entries.is_empty() {
+                let label = key.replace('_', " ");
+                parts.push(format!("{}: {}", label, entries.join("; ")));
+            }
+        }
+    }
+
+    parts.join(". ") + "."
+}
+
+/// Generate social facet composite for a character.
+///
+/// Covers: relationships + how others perceive this character (inbound perceptions).
+/// Provides social network and reputation context.
+///
+/// # Arguments
+///
+/// * `character` - The character entity
+/// * `relationships` - Tuples of (relationship_type, target_name)
+/// * `perceptions_of` - Inbound perceptions: (observer_name, perception_text)
+///
+/// # Returns
+///
+/// A natural-language composite text for the social facet.
+pub fn social_composite(
+    character: &Character,
+    relationships: &[(String, String)],
+    perceptions_of: &[(String, String)],
+) -> String {
+    let mut parts = Vec::new();
+    parts.push(format!("{}'s social network", character.name));
+
+    // Relationships
+    if !relationships.is_empty() {
+        let rel_desc: Vec<_> = relationships
+            .iter()
+            .map(|(rel_type, target)| format!("{} with {}", rel_type, target))
+            .collect();
+        parts.push(format!("Relationships: {}", rel_desc.join(", ")));
+    }
+
+    // Inbound perceptions (how others see this character)
+    if !perceptions_of.is_empty() {
+        let perc_desc: Vec<_> = perceptions_of
+            .iter()
+            .map(|(observer, text)| format!("{} sees them as {}", observer, text))
+            .collect();
+        parts.push(format!("Perceived by others: {}", perc_desc.join("; ")));
+    }
+
+    if relationships.is_empty() && perceptions_of.is_empty() {
+        parts.push("No relationships or perceptions recorded".to_string());
+    }
+
+    parts.join(". ") + "."
+}
+
+/// Generate narrative facet composite for a character.
+///
+/// Covers: scenes + knowledge held by character.
+/// Provides narrative involvement and what the character knows.
+///
+/// # Arguments
+///
+/// * `character_name` - Name of the character
+/// * `scenes` - Tuples of (scene_title, optional summary)
+/// * `knowledge` - Tuples of (fact, certainty)
+///
+/// # Returns
+///
+/// A natural-language composite text for the narrative facet.
+pub fn narrative_composite(
+    character_name: &str,
+    scenes: &[(String, Option<String>)],
+    knowledge: &[(String, String)],
+) -> String {
+    let mut parts = Vec::new();
+    parts.push(format!("{}'s narrative involvement", character_name));
+
+    // Scene participation
+    if !scenes.is_empty() {
+        let scene_descs: Vec<String> = scenes
+            .iter()
+            .map(|(title, summary)| {
+                if let Some(s) = summary {
+                    format!("\"{}\" - {}", title, s)
+                } else {
+                    format!("\"{}\"", title)
+                }
+            })
+            .collect();
+        parts.push(format!("Participates in: {}", scene_descs.join("; ")));
+    }
+
+    // Knowledge held
+    if !knowledge.is_empty() {
+        let knowledge_descs: Vec<String> = knowledge
+            .iter()
+            .map(|(fact, certainty)| match certainty.as_str() {
+                "knows" => format!("knows that {}", fact),
+                "believes_wrongly" => format!("wrongly believes that {}", fact),
+                "suspects" => format!("suspects that {}", fact),
+                "denies" => format!("denies that {}", fact),
+                "uncertain" => format!("is uncertain whether {}", fact),
+                "assumes" => format!("assumes that {}", fact),
+                "forgotten" => format!("has forgotten that {}", fact),
+                _ => format!("knows that {}", fact),
+            })
+            .collect();
+        parts.push(format!("{} {}", character_name, knowledge_descs.join("; ")));
+    }
+
+    if scenes.is_empty() && knowledge.is_empty() {
+        parts.push("No scenes or knowledge recorded".to_string());
+    }
+
+    parts.join(". ") + "."
+}
+
 /// Generate composite text from raw JSON entity data.
 ///
 /// This is a convenience function for cases where you have raw JSON
@@ -656,5 +835,180 @@ mod tests {
         assert!(result.contains("The Confrontation"));
         assert!(result.contains("The Dark Forest"));
         assert!(result.contains("The Great Betrayal"));
+    }
+
+    #[test]
+    fn test_identity_composite_minimal() {
+        let character = Character {
+            id: RecordId::from(("character", "test")),
+            name: "Alice".to_string(),
+            aliases: vec![],
+            roles: vec![],
+            profile: HashMap::new(),
+            created_at: surrealdb::Datetime::default(),
+            updated_at: surrealdb::Datetime::default(),
+        };
+
+        let result = identity_composite(&character);
+        assert!(result.contains("Alice"));
+        assert!(result.contains("is a character"));
+    }
+
+    #[test]
+    fn test_identity_composite_full() {
+        let character = Character {
+            id: RecordId::from(("character", "test")),
+            name: "Alice".to_string(),
+            aliases: vec!["The Blade".to_string(), "Shadow".to_string()],
+            roles: vec!["warrior".to_string(), "leader".to_string()],
+            profile: HashMap::new(),
+            created_at: surrealdb::Datetime::default(),
+            updated_at: surrealdb::Datetime::default(),
+        };
+
+        let result = identity_composite(&character);
+        assert!(result.contains("Alice"));
+        assert!(result.contains("warrior"));
+        assert!(result.contains("leader"));
+        assert!(result.contains("The Blade"));
+        assert!(result.contains("Shadow"));
+    }
+
+    #[test]
+    fn test_psychology_composite_empty() {
+        let character = Character {
+            id: RecordId::from(("character", "test")),
+            name: "Alice".to_string(),
+            aliases: vec![],
+            roles: vec![],
+            profile: HashMap::new(),
+            created_at: surrealdb::Datetime::default(),
+            updated_at: surrealdb::Datetime::default(),
+        };
+
+        let result = psychology_composite(&character);
+        assert!(result.contains("Alice"));
+        assert!(result.contains("no defined psychological profile"));
+    }
+
+    #[test]
+    fn test_psychology_composite_full() {
+        let mut profile = HashMap::new();
+        profile.insert(
+            "wound".to_string(),
+            vec!["I am unlovable — pushes people away".to_string()],
+        );
+        profile.insert("desire_conscious".to_string(), vec!["freedom".to_string()]);
+        profile.insert(
+            "desire_unconscious".to_string(),
+            vec!["belonging".to_string()],
+        );
+        profile.insert(
+            "contradiction".to_string(),
+            vec!["seeks connection while pushing away".to_string()],
+        );
+
+        let character = Character {
+            id: RecordId::from(("character", "test")),
+            name: "Alice".to_string(),
+            aliases: vec![],
+            roles: vec![],
+            profile,
+            created_at: surrealdb::Datetime::default(),
+            updated_at: surrealdb::Datetime::default(),
+        };
+
+        let result = psychology_composite(&character);
+        assert!(result.contains("Alice's psychology"));
+        assert!(result.contains("unlovable"));
+        assert!(result.contains("freedom"));
+        assert!(result.contains("belonging"));
+        assert!(result.contains("contradiction"));
+    }
+
+    #[test]
+    fn test_social_composite_empty() {
+        let character = Character {
+            id: RecordId::from(("character", "test")),
+            name: "Alice".to_string(),
+            aliases: vec![],
+            roles: vec![],
+            profile: HashMap::new(),
+            created_at: surrealdb::Datetime::default(),
+            updated_at: surrealdb::Datetime::default(),
+        };
+
+        let result = social_composite(&character, &[], &[]);
+        assert!(result.contains("Alice's social network"));
+        assert!(result.contains("No relationships or perceptions"));
+    }
+
+    #[test]
+    fn test_social_composite_full() {
+        let character = Character {
+            id: RecordId::from(("character", "test")),
+            name: "Alice".to_string(),
+            aliases: vec![],
+            roles: vec![],
+            profile: HashMap::new(),
+            created_at: surrealdb::Datetime::default(),
+            updated_at: surrealdb::Datetime::default(),
+        };
+
+        let relationships = vec![
+            ("allied".to_string(), "Bob".to_string()),
+            ("rival".to_string(), "Carol".to_string()),
+        ];
+
+        let perceptions_of = vec![
+            ("Bob".to_string(), "a trusted leader".to_string()),
+            (
+                "Carol".to_string(),
+                "dangerous and unpredictable".to_string(),
+            ),
+        ];
+
+        let result = social_composite(&character, &relationships, &perceptions_of);
+        assert!(result.contains("Alice's social network"));
+        assert!(result.contains("allied with Bob"));
+        assert!(result.contains("rival with Carol"));
+        assert!(result.contains("Bob sees them as a trusted leader"));
+        assert!(result.contains("Carol sees them as dangerous"));
+    }
+
+    #[test]
+    fn test_narrative_composite_empty() {
+        let result = narrative_composite("Alice", &[], &[]);
+        assert!(result.contains("Alice's narrative involvement"));
+        assert!(result.contains("No scenes or knowledge"));
+    }
+
+    #[test]
+    fn test_narrative_composite_full() {
+        let scenes = vec![
+            (
+                "The Confrontation".to_string(),
+                Some("Alice faces Bob".to_string()),
+            ),
+            ("The Tavern Meeting".to_string(), None),
+        ];
+
+        let knowledge = vec![
+            (
+                "Bob is secretly the heir".to_string(),
+                "suspects".to_string(),
+            ),
+            (
+                "Carol trained under the old master".to_string(),
+                "knows".to_string(),
+            ),
+        ];
+
+        let result = narrative_composite("Alice", &scenes, &knowledge);
+        assert!(result.contains("Alice's narrative involvement"));
+        assert!(result.contains("The Confrontation"));
+        assert!(result.contains("The Tavern Meeting"));
+        assert!(result.contains("suspects that Bob is secretly the heir"));
+        assert!(result.contains("knows that Carol trained under the old master"));
     }
 }

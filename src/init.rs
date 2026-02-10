@@ -6,9 +6,10 @@ use std::sync::Arc;
 use surrealdb::{engine::local::Db, Surreal};
 
 use crate::db::{connection::init_db, schema::apply_schema};
-use crate::embedding::{
-    EmbeddingConfig, EmbeddingService, LocalEmbeddingService, StalenessManager,
+use crate::embedding::provider::{
+    create_embedding_service, load_provider_config, EmbeddingMetadata, ModelMatch,
 };
+use crate::embedding::{EmbeddingService, StalenessManager};
 use crate::repository::{
     SurrealEntityRepository, SurrealKnowledgeRepository, SurrealRelationshipRepository,
 };
@@ -36,6 +37,8 @@ pub struct AppContext {
     pub relationship_repo: Arc<SurrealRelationshipRepository>,
     pub knowledge_repo: Arc<SurrealKnowledgeRepository>,
     pub staleness_manager: Arc<StalenessManager>,
+    /// Whether the current embedding model mismatches stored world metadata.
+    pub embedding_model_mismatch: ModelMatch,
 }
 
 impl AppContext {
@@ -74,23 +77,49 @@ impl AppContext {
         let session_manager = Arc::new(SessionStateManager::load_or_create(&session_path)?);
         tracing::info!("Session state loaded");
 
-        // Embedding model
+        // Embedding model — load provider config
         tracing::info!("Initializing embedding model...");
-        let embedding_config = EmbeddingConfig::default();
-        let embedding_service: Arc<dyn EmbeddingService + Send + Sync> = Arc::new(
-            LocalEmbeddingService::new(embedding_config).unwrap_or_else(|e| {
+        let provider_config = load_provider_config(&data_path);
+        let embedding_service: Arc<dyn EmbeddingService + Send + Sync> =
+            create_embedding_service(&provider_config).unwrap_or_else(|e| {
                 tracing::error!("Failed to initialize embedding service: {}", e);
                 panic!("Embedding service initialization failed");
-            }),
-        );
+            });
 
         if embedding_service.is_available() {
             tracing::info!(
-                "Embedding model loaded ({} dimensions)",
+                "Embedding model loaded: {} via {} ({} dimensions)",
+                embedding_service.model_id(),
+                embedding_service.provider_name(),
                 embedding_service.dimensions()
             );
         } else {
             tracing::warn!("Embedding model not available");
+        }
+
+        // Check model match against stored world metadata
+        let embedding_model_mismatch =
+            check_embedding_metadata(&db, embedding_service.as_ref()).await;
+
+        match &embedding_model_mismatch {
+            ModelMatch::Mismatch {
+                stored_model,
+                current_model,
+                ..
+            } => {
+                tracing::warn!(
+                    "Embedding model mismatch: world was embedded with '{}', current model is '{}'. \
+                     Semantic search may be unreliable. Run 'narra world backfill --force' to re-embed.",
+                    stored_model,
+                    current_model
+                );
+            }
+            ModelMatch::NoMetadata => {
+                tracing::debug!("No embedding metadata stored yet (fresh or pre-metadata world)");
+            }
+            ModelMatch::Match => {
+                tracing::debug!("Embedding model matches stored metadata");
+            }
         }
 
         // Repositories
@@ -98,10 +127,22 @@ impl AppContext {
         let relationship_repo = Arc::new(SurrealRelationshipRepository::new(db.clone()));
         let knowledge_repo = Arc::new(SurrealKnowledgeRepository::new(db.clone()));
 
+        // Reranker — loads model eagerly, degrades gracefully if unavailable.
+        let reranker: Option<Arc<dyn crate::embedding::reranker::RerankerService + Send + Sync>> = {
+            let reranker = crate::embedding::reranker::LocalRerankerService::new();
+            if crate::embedding::reranker::RerankerService::is_available(&reranker) {
+                Some(Arc::new(reranker))
+            } else {
+                None
+            }
+        };
+
         // Services
-        let search_service: Arc<dyn SearchService + Send + Sync> = Arc::new(
-            SurrealSearchService::new(db.clone(), embedding_service.clone()),
-        );
+        let mut search = SurrealSearchService::new(db.clone(), embedding_service.clone());
+        if let Some(ref r) = reranker {
+            search = search.with_reranker(r.clone());
+        }
+        let search_service: Arc<dyn SearchService + Send + Sync> = Arc::new(search);
         let summary_service: Arc<dyn SummaryService + Send + Sync> =
             Arc::new(CachedSummaryService::with_defaults(db.clone()));
         let context_service: Arc<dyn ContextService + Send + Sync> = Arc::new(
@@ -128,6 +169,67 @@ impl AppContext {
             relationship_repo,
             knowledge_repo,
             staleness_manager,
+            embedding_model_mismatch,
         })
     }
+}
+
+/// Check if the current embedding model matches what's stored in world_meta.
+async fn check_embedding_metadata(
+    db: &Surreal<Db>,
+    embedding_service: &dyn EmbeddingService,
+) -> ModelMatch {
+    let query = "SELECT * FROM world_meta:default";
+    let result = db.query(query).await;
+
+    match result {
+        Ok(mut response) => {
+            let meta: Option<EmbeddingMetadata> = response.take(0).unwrap_or(None);
+            match meta {
+                Some(stored) => {
+                    let current_model = embedding_service.model_id();
+                    let current_dimensions = embedding_service.dimensions();
+
+                    if stored.embedding_model == current_model
+                        && stored.embedding_dimensions == current_dimensions
+                    {
+                        ModelMatch::Match
+                    } else {
+                        ModelMatch::Mismatch {
+                            stored_model: stored.embedding_model,
+                            stored_dimensions: stored.embedding_dimensions,
+                            current_model: current_model.to_string(),
+                            current_dimensions,
+                        }
+                    }
+                }
+                None => ModelMatch::NoMetadata,
+            }
+        }
+        Err(e) => {
+            tracing::debug!("Could not query world_meta: {}", e);
+            ModelMatch::NoMetadata
+        }
+    }
+}
+
+/// Update world_meta with the current embedding model info.
+pub async fn update_embedding_metadata(
+    db: &Surreal<Db>,
+    embedding_service: &dyn EmbeddingService,
+) -> Result<(), crate::NarraError> {
+    db.query(
+        "UPSERT world_meta:default SET \
+         embedding_model = $model, \
+         embedding_dimensions = $dims, \
+         embedding_provider = $provider, \
+         last_backfill_at = time::now(), \
+         updated_at = time::now()",
+    )
+    .bind(("model", embedding_service.model_id().to_string()))
+    .bind(("dims", embedding_service.dimensions() as i64))
+    .bind(("provider", embedding_service.provider_name().to_string()))
+    .await?;
+
+    Ok(())
 }

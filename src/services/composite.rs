@@ -51,6 +51,37 @@ pub struct SituationReport {
     pub high_tension_pairs: Vec<TensionPair>,
     pub theme_count: usize,
     pub suggestions: Vec<String>,
+    pub narrative_momentum: NarrativeMomentum,
+    pub unresolved_threads: Vec<UnresolvedThread>,
+    pub character_arc_summaries: Vec<CharacterArcBrief>,
+}
+
+/// Narrative momentum assessment.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum NarrativeMomentum {
+    Accelerating { reason: String },
+    Stalling { reason: String },
+    Climactic { reason: String },
+}
+
+/// An unresolved plot thread.
+#[derive(Debug, Clone, Serialize)]
+pub struct UnresolvedThread {
+    pub thread_type: String, // "secret", "tension", "false_belief", "stale_arc"
+    pub description: String,
+    pub involves: Vec<String>,        // entity IDs
+    pub age_estimate: Option<String>, // "recent", "old", "ancient"
+}
+
+/// Brief character arc summary.
+#[derive(Debug, Clone, Serialize)]
+pub struct CharacterArcBrief {
+    pub character_id: String,
+    pub character_name: String,
+    pub arc_status: String, // "growing", "stagnant", "regressing", "unknown"
+    pub snapshot_count: usize,
+    pub recent_drift: Option<f32>,
 }
 
 /// How others perceive a character.
@@ -74,6 +105,37 @@ pub struct CharacterDossier {
     pub avg_tension_toward_them: Option<f32>,
     pub key_perceptions: Vec<PerceptionSummary>,
     pub suggestions: Vec<String>,
+    pub arc_trajectory: Option<ArcTrajectoryBrief>,
+    pub relationship_map: Vec<RelationshipBrief>,
+    pub knowledge_inventory: KnowledgeInventory,
+}
+
+/// Brief arc trajectory summary.
+#[derive(Debug, Clone, Serialize)]
+pub struct ArcTrajectoryBrief {
+    pub direction: String, // "growing", "declining", "stable"
+    pub total_drift: f32,
+    pub snapshot_count: usize,
+    pub most_recent_event: Option<String>,
+}
+
+/// Brief relationship summary.
+#[derive(Debug, Clone, Serialize)]
+pub struct RelationshipBrief {
+    pub other_character: String,
+    pub other_name: String,
+    pub rel_type: String,
+    pub tension: Option<i32>,
+}
+
+/// Knowledge totals by certainty level.
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct KnowledgeInventory {
+    pub knows: usize,
+    pub suspects: usize,
+    pub believes_wrongly: usize,
+    pub uncertain: usize,
+    pub other: usize,
 }
 
 /// Dynamics between a pair of characters for scene planning.
@@ -97,6 +159,26 @@ pub struct ScenePlan {
     pub shared_history_scenes: usize,
     pub applicable_facts: Vec<String>,
     pub opportunities: Vec<String>,
+    pub knowledge_reveals: Vec<KnowledgeReveal>,
+    pub fact_constraints: Vec<FactConstraint>,
+}
+
+/// A knowledge reveal opportunity in a scene.
+#[derive(Debug, Clone, Serialize)]
+pub struct KnowledgeReveal {
+    pub revealer: String,        // who could reveal
+    pub learner: String,         // who could learn
+    pub fact: String,            // what could be revealed
+    pub dramatic_potential: f32, // weighted score
+}
+
+/// A universe fact that constrains the scene.
+#[derive(Debug, Clone, Serialize)]
+pub struct FactConstraint {
+    pub fact_id: String,
+    pub title: String,
+    pub enforcement_level: String, // "hard", "soft", "suggestion"
+    pub relevance: String,         // why it applies to this scene
 }
 
 // ---------------------------------------------------------------------------
@@ -135,6 +217,77 @@ struct KnowledgeCountRow {
 #[derive(serde::Deserialize)]
 struct FactTitleRow {
     title: String,
+}
+
+#[derive(serde::Deserialize)]
+struct ArcSnapshotCountRow {
+    #[allow(dead_code)]
+    count: usize,
+    recent_count: Option<usize>,
+    old_count: Option<usize>,
+}
+
+#[derive(serde::Deserialize)]
+struct SecretTargetRow {
+    target: String,
+    character_id: String,
+    #[allow(dead_code)]
+    fact: String,
+}
+
+#[derive(serde::Deserialize)]
+struct HighTensionRow {
+    observer: String,
+    target: String,
+    tension_level: i32,
+}
+
+#[derive(serde::Deserialize)]
+struct FalseBeliefRow {
+    character_id: String,
+    target: String,
+}
+
+#[derive(serde::Deserialize)]
+struct StaleArcRow {
+    character_id: String,
+    character_name: String,
+}
+
+#[derive(serde::Deserialize)]
+struct CharacterArcRow {
+    character_id: String,
+    character_name: String,
+    snapshot_count: usize,
+    recent_drift: Option<f32>,
+}
+
+#[derive(serde::Deserialize)]
+struct ArcSnapshotRow {
+    delta_magnitude: Option<f32>,
+    event_id: Option<String>,
+    #[allow(dead_code)]
+    created_at: surrealdb::sql::Datetime,
+}
+
+#[derive(serde::Deserialize)]
+struct RelationshipRow {
+    other_character: String,
+    other_name: String,
+    rel_type: String,
+}
+
+#[derive(serde::Deserialize)]
+struct CertaintyCountRow {
+    certainty: String,
+    count: usize,
+}
+
+#[derive(serde::Deserialize)]
+struct FactConstraintRow {
+    fact_id: String,
+    title: String,
+    enforcement_level: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -202,12 +355,24 @@ impl CompositeIntelligenceService {
             &high_tension_pairs,
         );
 
+        // 6. Narrative momentum
+        let narrative_momentum = self.compute_narrative_momentum().await;
+
+        // 7. Unresolved threads
+        let unresolved_threads = self.find_unresolved_threads().await;
+
+        // 8. Character arc summaries
+        let character_arc_summaries = self.summarize_character_arcs(5).await;
+
         Ok(SituationReport {
             irony_highlights,
             knowledge_conflicts,
             high_tension_pairs,
             theme_count,
             suggestions,
+            narrative_momentum,
+            unresolved_threads,
+            character_arc_summaries,
         })
     }
 
@@ -283,6 +448,15 @@ impl CompositeIntelligenceService {
             &key_perceptions,
         );
 
+        // 8. Arc trajectory
+        let arc_trajectory = self.compute_arc_trajectory(&full_id).await;
+
+        // 9. Relationship map
+        let relationship_map = self.build_relationship_map(&full_id).await;
+
+        // 10. Knowledge inventory
+        let knowledge_inventory = self.build_knowledge_inventory(&full_id).await;
+
         Ok(CharacterDossier {
             name,
             roles,
@@ -294,6 +468,9 @@ impl CompositeIntelligenceService {
             avg_tension_toward_them: avg_tension,
             key_perceptions,
             suggestions,
+            arc_trajectory,
+            relationship_map,
+            knowledge_inventory,
         })
     }
 
@@ -310,6 +487,7 @@ impl CompositeIntelligenceService {
         let mut total_irony = 0usize;
         let mut highest_tension: Option<(String, String, i32)> = None;
         let mut total_shared = 0usize;
+        let mut all_asymmetries = Vec::new();
 
         // For each pair
         for i in 0..normalized.len() {
@@ -324,6 +502,9 @@ impl CompositeIntelligenceService {
                     .unwrap_or_default();
                 let asym_count = asymmetries.len();
                 total_irony += asym_count;
+
+                // Store asymmetries for knowledge reveals
+                all_asymmetries.extend(asymmetries);
 
                 // Tension and feelings from perceives edge
                 let (tension, feelings) = self.fetch_pair_tension(a, b).await;
@@ -362,6 +543,12 @@ impl CompositeIntelligenceService {
         // Opportunities
         let opportunities = generate_scene_opportunities(&pair_dynamics, &applicable_facts);
 
+        // Knowledge reveals from asymmetries
+        let knowledge_reveals = self.generate_knowledge_reveals(&all_asymmetries);
+
+        // Fact constraints
+        let fact_constraints = self.fetch_fact_constraints(&normalized).await;
+
         Ok(ScenePlan {
             characters: normalized,
             pair_dynamics,
@@ -370,6 +557,8 @@ impl CompositeIntelligenceService {
             shared_history_scenes: total_shared,
             applicable_facts,
             opportunities,
+            knowledge_reveals,
+            fact_constraints,
         })
     }
 
@@ -563,6 +752,431 @@ impl CompositeIntelligenceService {
 
         let rows: Vec<FactTitleRow> = result.take(0).unwrap_or_default();
         Ok(rows.into_iter().map(|r| r.title).collect())
+    }
+
+    /// Compute narrative momentum based on arc snapshot activity and tension levels.
+    async fn compute_narrative_momentum(&self) -> NarrativeMomentum {
+        // Query arc snapshots from last 30 days vs previous 30 days
+        let query = "SELECT \
+            count() AS count, \
+            count() FILTER created_at >= time::now() - 30d AS recent_count, \
+            count() FILTER created_at < time::now() - 30d AND created_at >= time::now() - 60d AS old_count \
+            FROM arc_snapshot \
+            WHERE entity_type = 'character' \
+            GROUP ALL";
+
+        let snapshot_activity = match self.db.query(query).await {
+            Ok(mut r) => {
+                let row: Option<ArcSnapshotCountRow> = r.take(0).unwrap_or(None);
+                row
+            }
+            Err(_) => None,
+        };
+
+        // Query average tension level
+        let tension_query = "SELECT math::mean(tension_level) AS avg_tension \
+            FROM perceives \
+            WHERE tension_level IS NOT NONE \
+            GROUP ALL";
+
+        #[derive(serde::Deserialize)]
+        struct AvgTensionRow {
+            avg_tension: Option<f32>,
+        }
+
+        let avg_tension = match self.db.query(tension_query).await {
+            Ok(mut r) => {
+                let row: Option<AvgTensionRow> = r.take(0).unwrap_or(None);
+                row.and_then(|r| r.avg_tension)
+            }
+            Err(_) => None,
+        };
+
+        // Determine momentum
+        match (snapshot_activity, avg_tension) {
+            (Some(activity), Some(tension)) if tension >= 7.0 => NarrativeMomentum::Climactic {
+                reason: format!(
+                    "High tension (avg {:.1}), {} arc updates in last 30 days",
+                    tension,
+                    activity.recent_count.unwrap_or(0)
+                ),
+            },
+            (Some(activity), _)
+                if activity.recent_count.unwrap_or(0) > activity.old_count.unwrap_or(0) =>
+            {
+                NarrativeMomentum::Accelerating {
+                    reason: format!(
+                        "{} arc updates in last 30 days vs {} in previous 30 days",
+                        activity.recent_count.unwrap_or(0),
+                        activity.old_count.unwrap_or(0)
+                    ),
+                }
+            }
+            _ => NarrativeMomentum::Stalling {
+                reason: "Low arc activity and tension levels".to_string(),
+            },
+        }
+    }
+
+    /// Find unresolved narrative threads.
+    async fn find_unresolved_threads(&self) -> Vec<UnresolvedThread> {
+        let mut threads = Vec::new();
+
+        // 1. Secrets (knowledge where only 1 character knows)
+        let secrets_query = "SELECT out AS target, in AS character_id, out AS fact \
+            FROM knows \
+            WHERE certainty = 'Knows' \
+            GROUP BY out \
+            HAVING count() = 1 \
+            LIMIT 5";
+
+        if let Ok(mut result) = self.db.query(secrets_query).await {
+            let rows: Vec<SecretTargetRow> = result.take(0).unwrap_or_default();
+            for row in rows {
+                threads.push(UnresolvedThread {
+                    thread_type: "secret".to_string(),
+                    description: format!(
+                        "Only {} knows about {}",
+                        row.character_id
+                            .rsplit_once(':')
+                            .map(|(_, b)| b)
+                            .unwrap_or(&row.character_id),
+                        row.target
+                            .rsplit_once(':')
+                            .map(|(_, b)| b)
+                            .unwrap_or(&row.target)
+                    ),
+                    involves: vec![row.character_id, row.target],
+                    age_estimate: None,
+                });
+            }
+        }
+
+        // 2. High tensions (tension_level >= 7)
+        let tensions_query =
+            "SELECT type::string(in) AS observer, type::string(out) AS target, tension_level \
+            FROM perceives \
+            WHERE tension_level >= 7 \
+            ORDER BY tension_level DESC \
+            LIMIT 5";
+
+        if let Ok(mut result) = self.db.query(tensions_query).await {
+            let rows: Vec<HighTensionRow> = result.take(0).unwrap_or_default();
+            for row in rows {
+                threads.push(UnresolvedThread {
+                    thread_type: "tension".to_string(),
+                    description: format!(
+                        "High tension ({}) between {} and {}",
+                        row.tension_level,
+                        row.observer
+                            .rsplit_once(':')
+                            .map(|(_, b)| b)
+                            .unwrap_or(&row.observer),
+                        row.target
+                            .rsplit_once(':')
+                            .map(|(_, b)| b)
+                            .unwrap_or(&row.target)
+                    ),
+                    involves: vec![row.observer, row.target],
+                    age_estimate: Some("recent".to_string()),
+                });
+            }
+        }
+
+        // 3. False beliefs
+        let false_beliefs_query =
+            "SELECT type::string(in) AS character_id, type::string(out) AS target \
+            FROM knows \
+            WHERE certainty = 'BelievesWrongly' \
+            LIMIT 5";
+
+        if let Ok(mut result) = self.db.query(false_beliefs_query).await {
+            let rows: Vec<FalseBeliefRow> = result.take(0).unwrap_or_default();
+            for row in rows {
+                threads.push(UnresolvedThread {
+                    thread_type: "false_belief".to_string(),
+                    description: format!(
+                        "{} holds false belief about {}",
+                        row.character_id
+                            .rsplit_once(':')
+                            .map(|(_, b)| b)
+                            .unwrap_or(&row.character_id),
+                        row.target
+                            .rsplit_once(':')
+                            .map(|(_, b)| b)
+                            .unwrap_or(&row.target)
+                    ),
+                    involves: vec![row.character_id, row.target],
+                    age_estimate: None,
+                });
+            }
+        }
+
+        // 4. Stale arcs (characters with NO arc_snapshot in 30+ days)
+        let stale_arcs_query = "SELECT id AS character_id, name AS character_name \
+            FROM character \
+            WHERE id NOT IN (SELECT VALUE entity_id FROM arc_snapshot WHERE created_at >= time::now() - 30d) \
+            LIMIT 5";
+
+        if let Ok(mut result) = self.db.query(stale_arcs_query).await {
+            let rows: Vec<StaleArcRow> = result.take(0).unwrap_or_default();
+            for row in rows {
+                threads.push(UnresolvedThread {
+                    thread_type: "stale_arc".to_string(),
+                    description: format!("{} has no recent arc development", row.character_name),
+                    involves: vec![row.character_id],
+                    age_estimate: Some("old".to_string()),
+                });
+            }
+        }
+
+        threads
+    }
+
+    /// Summarize character arcs for top N characters by arc snapshot count.
+    async fn summarize_character_arcs(&self, limit: usize) -> Vec<CharacterArcBrief> {
+        let query = format!(
+            "SELECT \
+                entity_id AS character_id, \
+                entity_id.name AS character_name, \
+                count() AS snapshot_count, \
+                math::mean(delta_magnitude) AS recent_drift \
+            FROM arc_snapshot \
+            WHERE entity_type = 'character' AND created_at >= time::now() - 90d \
+            GROUP BY entity_id \
+            ORDER BY snapshot_count DESC \
+            LIMIT {}",
+            limit
+        );
+
+        let mut briefs = Vec::new();
+        if let Ok(mut result) = self.db.query(&query).await {
+            let rows: Vec<CharacterArcRow> = result.take(0).unwrap_or_default();
+            for row in rows {
+                let arc_status = match row.recent_drift {
+                    Some(drift) if drift > 0.5 => "growing",
+                    Some(drift) if drift < 0.2 => "stagnant",
+                    Some(_) => "evolving",
+                    None => "unknown",
+                };
+
+                briefs.push(CharacterArcBrief {
+                    character_id: row.character_id,
+                    character_name: row.character_name,
+                    arc_status: arc_status.to_string(),
+                    snapshot_count: row.snapshot_count,
+                    recent_drift: row.recent_drift,
+                });
+            }
+        }
+
+        briefs
+    }
+
+    /// Compute arc trajectory for a character.
+    async fn compute_arc_trajectory(&self, full_id: &str) -> Option<ArcTrajectoryBrief> {
+        let query = format!(
+            "SELECT delta_magnitude, type::string(event_id) AS event_id, created_at \
+            FROM arc_snapshot \
+            WHERE entity_id = {} AND entity_type = 'character' \
+            ORDER BY created_at DESC \
+            LIMIT 10",
+            full_id
+        );
+
+        let snapshots = match self.db.query(&query).await {
+            Ok(mut r) => {
+                let rows: Vec<ArcSnapshotRow> = r.take(0).unwrap_or_default();
+                rows
+            }
+            Err(_) => return None,
+        };
+
+        if snapshots.is_empty() {
+            return None;
+        }
+
+        let total_drift: f32 = snapshots.iter().filter_map(|s| s.delta_magnitude).sum();
+
+        let snapshot_count = snapshots.len();
+
+        let direction = if snapshot_count < 2 {
+            "unknown"
+        } else {
+            let recent_avg = snapshots
+                .iter()
+                .take(3)
+                .filter_map(|s| s.delta_magnitude)
+                .sum::<f32>()
+                / 3.0;
+            if recent_avg > 0.5 {
+                "growing"
+            } else if recent_avg < 0.2 {
+                "stable"
+            } else {
+                "declining"
+            }
+        };
+
+        let most_recent_event = snapshots.first().and_then(|s| s.event_id.clone());
+
+        Some(ArcTrajectoryBrief {
+            direction: direction.to_string(),
+            total_drift,
+            snapshot_count,
+            most_recent_event,
+        })
+    }
+
+    /// Build relationship map for a character with tension overlays.
+    async fn build_relationship_map(&self, full_id: &str) -> Vec<RelationshipBrief> {
+        // Query relationships
+        let query = format!(
+            "SELECT type::string(out) AS other_character, out.name AS other_name, rel_type \
+            FROM relates_to \
+            WHERE in = {} \
+            LIMIT 20",
+            full_id
+        );
+
+        let relationships = match self.db.query(&query).await {
+            Ok(mut r) => {
+                let rows: Vec<RelationshipRow> = r.take(0).unwrap_or_default();
+                rows
+            }
+            Err(_) => return vec![],
+        };
+
+        let mut briefs = Vec::new();
+        for rel in relationships {
+            // Query tension for this pair
+            let tension_query = format!(
+                "SELECT tension_level FROM perceives \
+                WHERE (in = {} AND out = {}) OR (in = {} AND out = {}) \
+                ORDER BY tension_level DESC LIMIT 1",
+                full_id, rel.other_character, rel.other_character, full_id
+            );
+
+            #[derive(serde::Deserialize)]
+            struct TensionOnlyRow {
+                tension_level: Option<i32>,
+            }
+
+            let tension = match self.db.query(&tension_query).await {
+                Ok(mut r) => {
+                    let row: Option<TensionOnlyRow> = r.take(0).unwrap_or(None);
+                    row.and_then(|t| t.tension_level)
+                }
+                Err(_) => None,
+            };
+
+            briefs.push(RelationshipBrief {
+                other_character: rel.other_character,
+                other_name: rel.other_name,
+                rel_type: rel.rel_type,
+                tension,
+            });
+        }
+
+        briefs
+    }
+
+    /// Build knowledge inventory grouped by certainty level.
+    async fn build_knowledge_inventory(&self, full_id: &str) -> KnowledgeInventory {
+        let query = format!(
+            "SELECT certainty, count() AS count \
+            FROM knows \
+            WHERE in = {} \
+            GROUP BY certainty",
+            full_id
+        );
+
+        let rows = match self.db.query(&query).await {
+            Ok(mut r) => {
+                let rows: Vec<CertaintyCountRow> = r.take(0).unwrap_or_default();
+                rows
+            }
+            Err(_) => return KnowledgeInventory::default(),
+        };
+
+        let mut inventory = KnowledgeInventory {
+            knows: 0,
+            suspects: 0,
+            believes_wrongly: 0,
+            uncertain: 0,
+            other: 0,
+        };
+
+        for row in rows {
+            match row.certainty.as_str() {
+                "Knows" => inventory.knows = row.count,
+                "Suspects" => inventory.suspects = row.count,
+                "BelievesWrongly" => inventory.believes_wrongly = row.count,
+                "Uncertain" => inventory.uncertain = row.count,
+                _ => inventory.other += row.count,
+            }
+        }
+
+        inventory
+    }
+
+    /// Generate knowledge reveal opportunities from asymmetries.
+    fn generate_knowledge_reveals(
+        &self,
+        asymmetries: &[KnowledgeAsymmetry],
+    ) -> Vec<KnowledgeReveal> {
+        let mut reveals: Vec<KnowledgeReveal> = asymmetries
+            .iter()
+            .map(|a| KnowledgeReveal {
+                revealer: a.knowing_character_name.clone(),
+                learner: a.unknowing_character_name.clone(),
+                fact: a.about.clone(),
+                dramatic_potential: a.dramatic_weight,
+            })
+            .collect();
+
+        // Sort by dramatic potential and take top 5
+        reveals.sort_by(|a, b| {
+            b.dramatic_potential
+                .partial_cmp(&a.dramatic_potential)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        reveals.truncate(5);
+
+        reveals
+    }
+
+    /// Fetch fact constraints for scene characters.
+    async fn fetch_fact_constraints(&self, character_ids: &[String]) -> Vec<FactConstraint> {
+        if character_ids.is_empty() {
+            return vec![];
+        }
+
+        let id_list: Vec<String> = character_ids.iter().map(|id| id.to_string()).collect();
+        let array_str = id_list.join(", ");
+        let query = format!(
+            "SELECT type::string(id) AS fact_id, title, enforcement_level \
+            FROM universe_fact \
+            WHERE id IN (SELECT VALUE fact FROM fact_applies WHERE entity IN [{}])",
+            array_str
+        );
+
+        let rows = match self.db.query(&query).await {
+            Ok(mut r) => {
+                let rows: Vec<FactConstraintRow> = r.take(0).unwrap_or_default();
+                rows
+            }
+            Err(_) => return vec![],
+        };
+
+        rows.into_iter()
+            .map(|r| FactConstraint {
+                fact_id: r.fact_id.clone(),
+                title: r.title.clone(),
+                enforcement_level: r.enforcement_level.clone(),
+                relevance: "Applies to characters in this scene".to_string(),
+            })
+            .collect()
     }
 }
 

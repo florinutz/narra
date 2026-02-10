@@ -1,9 +1,11 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::Arc;
 use surrealdb::engine::local::Db;
 use surrealdb::Surreal;
 
+use crate::embedding::reranker::RerankerService;
 use crate::embedding::EmbeddingService;
 use crate::NarraError;
 
@@ -184,12 +186,47 @@ pub trait SearchService: Send + Sync {
         query: &str,
         filter: SearchFilter,
     ) -> Result<Vec<SearchResult>, NarraError>;
+
+    /// Re-ranked search: runs hybrid search for extra candidates, then
+    /// uses a cross-encoder to re-score and re-order results.
+    /// Falls back to hybrid search if reranker is unavailable.
+    async fn reranked_search(
+        &self,
+        query: &str,
+        filter: SearchFilter,
+    ) -> Result<Vec<SearchResult>, NarraError>;
+
+    /// Search character facet embeddings.
+    ///
+    /// Returns characters ranked by semantic similarity to query on a specific facet.
+    /// Valid facets: "identity", "psychology", "social", "narrative".
+    /// Falls back gracefully if embeddings unavailable.
+    async fn faceted_search(
+        &self,
+        query: &str,
+        facet: &str,
+        filter: SearchFilter,
+    ) -> Result<Vec<SearchResult>, NarraError>;
+
+    /// Weighted multi-facet search.
+    ///
+    /// Computes weighted average of cosine similarities across multiple facets.
+    /// Weights are normalized to sum to 1.0. Example weights:
+    /// `{"psychology": 0.6, "social": 0.4}` searches 60% psychology, 40% social.
+    /// Falls back gracefully if embeddings unavailable.
+    async fn multi_facet_search(
+        &self,
+        query: &str,
+        weights: &HashMap<String, f32>,
+        filter: SearchFilter,
+    ) -> Result<Vec<SearchResult>, NarraError>;
 }
 
 /// SurrealDB implementation of SearchService.
 pub struct SurrealSearchService {
     db: Arc<Surreal<Db>>,
     embedding_service: Arc<dyn EmbeddingService + Send + Sync>,
+    reranker: Option<Arc<dyn RerankerService + Send + Sync>>,
 }
 
 /// Build SQL WHERE clause fragment and bindings from metadata filters for a given entity type.
@@ -300,7 +337,13 @@ impl SurrealSearchService {
         Self {
             db,
             embedding_service,
+            reranker: None,
         }
+    }
+
+    pub fn with_reranker(mut self, reranker: Arc<dyn RerankerService + Send + Sync>) -> Self {
+        self.reranker = Some(reranker);
+        self
     }
 
     /// Build a full-text search query for a specific entity type.
@@ -810,6 +853,271 @@ impl SearchService for SurrealSearchService {
         }
 
         Ok(all_results)
+    }
+
+    async fn reranked_search(
+        &self,
+        query: &str,
+        filter: SearchFilter,
+    ) -> Result<Vec<SearchResult>, NarraError> {
+        let desired_limit = filter.limit.unwrap_or(20);
+
+        // If no reranker, fall back to hybrid
+        let reranker = match &self.reranker {
+            Some(r) if r.is_available() => r.clone(),
+            _ => return self.hybrid_search(query, filter).await,
+        };
+
+        // Fetch 3x candidates for re-ranking
+        let candidate_filter = SearchFilter {
+            limit: Some(desired_limit * 3),
+            ..filter
+        };
+        let candidates = self.hybrid_search(query, candidate_filter).await?;
+
+        if candidates.is_empty() {
+            return Ok(vec![]);
+        }
+
+        // Fetch composite_text for each candidate to pass to the cross-encoder
+        let mut texts = Vec::with_capacity(candidates.len());
+        for candidate in &candidates {
+            let composite_query = format!("SELECT composite_text FROM {} LIMIT 1", candidate.id);
+            let mut resp = self.db.query(&composite_query).await?;
+
+            #[derive(Deserialize)]
+            struct CompositeRow {
+                composite_text: Option<String>,
+            }
+
+            let row: Option<CompositeRow> = resp.take(0).unwrap_or(None);
+            let text = row
+                .and_then(|r| r.composite_text)
+                .unwrap_or_else(|| candidate.name.clone());
+            texts.push(text);
+        }
+
+        // Re-rank with cross-encoder
+        let scored = reranker.rerank(query, &texts).await?;
+
+        // Map back to SearchResults with new scores
+        let mut results: Vec<SearchResult> = scored
+            .into_iter()
+            .filter_map(|(idx, score)| {
+                candidates.get(idx).map(|c| SearchResult {
+                    id: c.id.clone(),
+                    entity_type: c.entity_type.clone(),
+                    name: c.name.clone(),
+                    score,
+                })
+            })
+            .collect();
+
+        results.truncate(desired_limit);
+        Ok(results)
+    }
+
+    async fn faceted_search(
+        &self,
+        query: &str,
+        facet: &str,
+        filter: SearchFilter,
+    ) -> Result<Vec<SearchResult>, NarraError> {
+        // Validate facet name
+        if !["identity", "psychology", "social", "narrative"].contains(&facet) {
+            return Err(NarraError::Validation(format!(
+                "Invalid facet: {}. Valid facets: identity, psychology, social, narrative",
+                facet
+            )));
+        }
+
+        // Graceful degradation if embeddings unavailable
+        if !self.embedding_service.is_available() {
+            return Ok(vec![]);
+        }
+
+        // Generate query embedding
+        let query_vector = self.embedding_service.embed_text(query).await?;
+
+        let limit = filter.limit.unwrap_or(20);
+        let min_score = filter.min_score.unwrap_or(0.0);
+
+        let (filter_clause, filter_bindings) =
+            build_filter_clause(EntityType::Character, &filter.metadata);
+
+        // Brute-force cosine similarity on facet embedding
+        let facet_field = format!("{}_embedding", facet);
+        let query_str = format!(
+            r#"SELECT id, 'character' AS entity_type, name,
+                      vector::similarity::cosine({}, $query_vector) AS score
+               FROM character
+               WHERE {} IS NOT NONE{}
+               ORDER BY score DESC
+               LIMIT {}"#,
+            facet_field,
+            facet_field,
+            filter_clause,
+            limit * 2
+        );
+
+        let mut query_builder = self
+            .db
+            .query(&query_str)
+            .bind(("query_vector", query_vector));
+
+        for (key, value) in &filter_bindings {
+            query_builder = query_builder.bind((key.clone(), value.clone()));
+        }
+
+        let mut response = query_builder.await?;
+        let internal: Vec<SearchResultInternal> = response.take(0)?;
+
+        let mut results: Vec<SearchResult> = internal
+            .into_iter()
+            .map(SearchResult::from)
+            .filter(|r| r.score >= min_score)
+            .collect();
+
+        // Apply overall limit
+        if results.len() > limit {
+            results.truncate(limit);
+        }
+
+        Ok(results)
+    }
+
+    async fn multi_facet_search(
+        &self,
+        query: &str,
+        weights: &HashMap<String, f32>,
+        filter: SearchFilter,
+    ) -> Result<Vec<SearchResult>, NarraError> {
+        // Validate facet names
+        for facet in weights.keys() {
+            if !["identity", "psychology", "social", "narrative"].contains(&facet.as_str()) {
+                return Err(NarraError::Validation(format!(
+                    "Invalid facet: {}. Valid facets: identity, psychology, social, narrative",
+                    facet
+                )));
+            }
+        }
+
+        if weights.is_empty() {
+            return Err(NarraError::Validation(
+                "At least one facet weight required".to_string(),
+            ));
+        }
+
+        // Graceful degradation if embeddings unavailable
+        if !self.embedding_service.is_available() {
+            return Ok(vec![]);
+        }
+
+        // Normalize weights to sum to 1.0
+        let total_weight: f32 = weights.values().sum();
+        if total_weight <= 0.0 {
+            return Err(NarraError::Validation(
+                "Facet weights must sum to positive value".to_string(),
+            ));
+        }
+        let normalized_weights: HashMap<String, f32> = weights
+            .iter()
+            .map(|(k, v)| (k.clone(), v / total_weight))
+            .collect();
+
+        // Generate query embedding
+        let query_vector = self.embedding_service.embed_text(query).await?;
+
+        let limit = filter.limit.unwrap_or(20);
+        let min_score = filter.min_score.unwrap_or(0.0);
+
+        let (filter_clause, filter_bindings) =
+            build_filter_clause(EntityType::Character, &filter.metadata);
+
+        // Build facet field list for query
+        let facet_fields: Vec<String> = normalized_weights
+            .keys()
+            .map(|f| format!("{}_embedding", f))
+            .collect();
+        let facet_fields_str = facet_fields.join(", ");
+
+        // Fetch all characters with requested facet embeddings
+        let query_str = format!(
+            r#"SELECT id, name, {} FROM character WHERE {}"#,
+            facet_fields_str,
+            facet_fields
+                .iter()
+                .map(|f| format!("{} IS NOT NONE", f))
+                .collect::<Vec<_>>()
+                .join(" AND ")
+                + &filter_clause
+        );
+
+        let mut query_builder = self.db.query(&query_str);
+        for (key, value) in &filter_bindings {
+            query_builder = query_builder.bind((key.clone(), value.clone()));
+        }
+
+        let mut response = query_builder.await?;
+
+        #[derive(Deserialize)]
+        struct CharacterFacets {
+            id: surrealdb::RecordId,
+            name: String,
+            identity_embedding: Option<Vec<f32>>,
+            psychology_embedding: Option<Vec<f32>>,
+            social_embedding: Option<Vec<f32>>,
+            narrative_embedding: Option<Vec<f32>>,
+        }
+
+        let characters: Vec<CharacterFacets> = response.take(0)?;
+
+        // Compute weighted cosine similarity for each character
+        let mut results: Vec<SearchResult> = characters
+            .into_iter()
+            .filter_map(|char| {
+                let mut weighted_score = 0.0;
+
+                for (facet, weight) in &normalized_weights {
+                    let embedding = match facet.as_str() {
+                        "identity" => char.identity_embedding.as_ref(),
+                        "psychology" => char.psychology_embedding.as_ref(),
+                        "social" => char.social_embedding.as_ref(),
+                        "narrative" => char.narrative_embedding.as_ref(),
+                        _ => None,
+                    };
+
+                    if let Some(emb) = embedding {
+                        let cosine = crate::utils::math::cosine_similarity(&query_vector, emb);
+                        weighted_score += cosine * weight;
+                    }
+                }
+
+                if weighted_score >= min_score {
+                    Some(SearchResult {
+                        id: char.id.to_string(),
+                        entity_type: "character".to_string(),
+                        name: char.name,
+                        score: weighted_score,
+                    })
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        // Sort by weighted score descending, then by id ascending for stable pagination
+        results.sort_by(|a, b| match b.score.partial_cmp(&a.score) {
+            Some(std::cmp::Ordering::Equal) | None => a.id.cmp(&b.id),
+            Some(ordering) => ordering,
+        });
+
+        // Apply limit
+        if results.len() > limit {
+            results.truncate(limit);
+        }
+
+        Ok(results)
     }
 }
 

@@ -241,6 +241,9 @@ pub enum QueryRequest {
     ArcHistory {
         /// Entity ID (e.g., "character:alice")
         entity_id: String,
+        /// Optional facet filter for character snapshots (identity, psychology, social, narrative)
+        #[serde(default)]
+        facet: Option<String>,
         /// Maximum snapshots to return (default: 50)
         #[serde(default)]
         limit: Option<usize>,
@@ -416,6 +419,60 @@ pub enum QueryRequest {
         /// Character IDs (e.g., ["character:alice", "character:bob"])
         character_ids: Vec<String>,
     },
+    /// Re-ranked search: hybrid search + cross-encoder re-ranking for better relevance.
+    /// Use when precision matters more than speed.
+    RerankedSearch {
+        /// Natural language query
+        query: String,
+        /// Filter by entity types (empty = all embeddable types)
+        #[serde(default)]
+        entity_types: Option<Vec<String>>,
+        /// Maximum results (default: 10)
+        #[serde(default)]
+        limit: Option<usize>,
+    },
+    /// Compute growth vector for an entity: where is it heading based on arc snapshots.
+    /// Finds entities aligned with the trajectory extrapolation.
+    GrowthVector {
+        /// Entity ID (e.g., "character:alice")
+        entity_id: String,
+        /// Maximum trajectory neighbors (default: 5)
+        #[serde(default)]
+        limit: Option<usize>,
+    },
+    /// Compute misperception vector: what does the observer get wrong about the target?
+    /// Shows the direction and magnitude of misperception.
+    MisperceptionVector {
+        /// Observer character ID (e.g., "character:bob")
+        observer_id: String,
+        /// Target character ID (e.g., "character:alice")
+        target_id: String,
+        /// Maximum neighbors to show (default: 5)
+        #[serde(default)]
+        limit: Option<usize>,
+    },
+    /// Analyze convergence/divergence between two entities over time.
+    /// Uses arc snapshots to compute per-snapshot similarity trend.
+    ConvergenceAnalysis {
+        /// First entity ID (e.g., "character:alice")
+        entity_a: String,
+        /// Second entity ID (e.g., "character:bob")
+        entity_b: String,
+        /// Maximum snapshots to analyze (default: 50)
+        #[serde(default)]
+        window: Option<usize>,
+    },
+    /// Find entities at the semantic midpoint of two entities.
+    /// "What bridges betrayal and redemption?"
+    SemanticMidpoint {
+        /// First entity ID
+        entity_a: String,
+        /// Second entity ID
+        entity_b: String,
+        /// Maximum results (default: 5)
+        #[serde(default)]
+        limit: Option<usize>,
+    },
     /// Preview change impact before mutating. Returns affected entities by severity.
     AnalyzeImpact {
         /// The entity ID to analyze impact for
@@ -426,6 +483,74 @@ pub enum QueryRequest {
         /// Whether to include full details of affected entities (default: false)
         #[serde(default)]
         include_details: Option<bool>,
+    },
+    /// Tension matrix: all character pairs with tension scores above a threshold.
+    /// Shows the emotional landscape of the narrative world.
+    TensionMatrix {
+        /// Minimum tension level to include (default: 1)
+        #[serde(default)]
+        min_tension: Option<i32>,
+        /// Maximum pairs to return (default: 50)
+        #[serde(default)]
+        limit: Option<usize>,
+    },
+    /// Knowledge gap analysis: important unknowns, blind spots, and false beliefs
+    /// for a specific character.
+    KnowledgeGapAnalysis {
+        /// Character ID (e.g., "character:alice")
+        character_id: String,
+    },
+    /// Relationship strength map: weighted graph of relationship intensities
+    /// for a character's connections.
+    RelationshipStrengthMap {
+        /// Character ID (e.g., "character:alice")
+        character_id: String,
+        /// Maximum relationships to return (default: 20)
+        #[serde(default)]
+        limit: Option<usize>,
+    },
+    /// Narrative threads: open plot lines, unresolved knowledge gaps, stale arcs.
+    NarrativeThreads {
+        /// Filter by status: "open", "stale", "all" (default: "all")
+        #[serde(default)]
+        status: Option<String>,
+        /// Maximum threads to return (default: 20)
+        #[serde(default)]
+        limit: Option<usize>,
+    },
+    /// Character voice profile: speech tendencies, certainty patterns,
+    /// emotional register, knowledge-informed vocabulary guidance.
+    CharacterVoice {
+        /// Character ID (e.g., "character:alice")
+        character_id: String,
+    },
+    /// Search character facet embeddings.
+    /// Returns characters ranked by semantic similarity on a specific facet.
+    FacetedSearch {
+        /// Natural language query (e.g., "inner conflict")
+        query: String,
+        /// Facet name: "identity", "psychology", "social", or "narrative"
+        facet: String,
+        /// Maximum results (default: 10)
+        #[serde(default)]
+        limit: Option<usize>,
+    },
+    /// Weighted multi-facet search across character dimensions.
+    /// Example: `{"psychology": 0.6, "social": 0.4}` searches 60% psychology, 40% social.
+    MultiFacetSearch {
+        /// Natural language query
+        query: String,
+        /// Facet weights (e.g., {"psychology": 0.6, "social": 0.4})
+        /// Weights are normalized to sum to 1.0
+        weights: HashMap<String, f32>,
+        /// Maximum results (default: 10)
+        #[serde(default)]
+        limit: Option<usize>,
+    },
+    /// Diagnostic: view all facet statuses and inter-facet similarities for a character.
+    CharacterFacets {
+        /// Character ID (e.g., "character:alice")
+        character_id: String,
     },
 }
 

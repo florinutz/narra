@@ -84,6 +84,12 @@ pub enum Commands {
         /// Use semantic (vector) search only
         #[arg(long)]
         semantic_only: bool,
+        /// Use cross-encoder re-ranking for better relevance ordering
+        #[arg(long)]
+        rerank: bool,
+        /// Search a specific character facet: identity, psychology, social, or narrative
+        #[arg(long)]
+        facet: Option<String>,
         /// Filter by entity type (character, location, event, scene, knowledge, note)
         #[arg(long, name = "type")]
         entity_type: Option<String>,
@@ -502,6 +508,9 @@ pub enum WorldCommands {
         /// Entity type filter
         #[arg(long, name = "type")]
         entity_type: Option<String>,
+        /// Force re-embedding all entities (use after switching embedding model)
+        #[arg(long)]
+        force: bool,
     },
     /// Export world data to YAML
     Export {
@@ -719,6 +728,49 @@ pub enum AnalyzeCommands {
     ScenePrep {
         #[arg(value_delimiter = ',')]
         characters: Vec<String>,
+    },
+    /// Growth vector: where is an entity heading based on arc snapshots
+    GrowthVector {
+        /// Entity (ID or name)
+        entity: String,
+        /// Maximum trajectory neighbors
+        #[arg(long, default_value = "5")]
+        limit: usize,
+    },
+    /// Misperception vector: what does observer get wrong about target
+    Misperception {
+        /// Observer character (ID or name)
+        observer: String,
+        /// Target character (ID or name)
+        target: String,
+        /// Maximum neighbors
+        #[arg(long, default_value = "5")]
+        limit: usize,
+    },
+    /// Convergence analysis: are two entities becoming more alike over time
+    Convergence {
+        /// First entity (ID or name)
+        entity_a: String,
+        /// Second entity (ID or name)
+        entity_b: String,
+        /// Maximum snapshots to analyze
+        #[arg(long)]
+        window: Option<usize>,
+    },
+    /// Semantic midpoint: find entities bridging two concepts
+    Midpoint {
+        /// First entity (ID or name)
+        entity_a: String,
+        /// Second entity (ID or name)
+        entity_b: String,
+        /// Maximum results
+        #[arg(long, default_value = "5")]
+        limit: usize,
+    },
+    /// Character facet diagnostics: view all facet statuses and inter-facet similarities
+    Facets {
+        /// Character ID or name
+        character: String,
     },
 }
 
@@ -984,6 +1036,8 @@ pub async fn execute(
             query,
             keyword_only,
             semantic_only,
+            rerank,
+            facet,
             entity_type,
             limit,
             subcommand,
@@ -1073,6 +1127,8 @@ pub async fn execute(
                     q,
                     *keyword_only,
                     *semantic_only,
+                    *rerank,
+                    facet.as_deref(),
                     no_semantic,
                     entity_type.as_deref(),
                     *limit,
@@ -1157,8 +1213,8 @@ pub async fn execute(
         Commands::World(cmd) => match cmd {
             WorldCommands::Status => handlers::world::handle_status(ctx, mode).await?,
             WorldCommands::Health => handlers::world::handle_health(ctx, mode).await?,
-            WorldCommands::Backfill { entity_type } => {
-                handlers::world::handle_backfill(ctx, entity_type.as_deref(), mode).await?
+            WorldCommands::Backfill { entity_type, force } => {
+                handlers::world::handle_backfill(ctx, entity_type.as_deref(), *force, mode).await?
             }
             WorldCommands::Export { output } => {
                 handlers::world::handle_export(ctx, output.as_deref(), mode).await?
@@ -1349,6 +1405,58 @@ pub async fn execute(
             }
             AnalyzeCommands::ScenePrep { characters } => {
                 handlers::analyze::handle_scene_prep(ctx, characters, mode).await?
+            }
+            AnalyzeCommands::GrowthVector { entity, limit } => {
+                handlers::analyze::handle_growth_vector(ctx, entity, *limit, mode, no_semantic)
+                    .await?
+            }
+            AnalyzeCommands::Misperception {
+                observer,
+                target,
+                limit,
+            } => {
+                handlers::analyze::handle_misperception(
+                    ctx,
+                    observer,
+                    target,
+                    *limit,
+                    mode,
+                    no_semantic,
+                )
+                .await?
+            }
+            AnalyzeCommands::Convergence {
+                entity_a,
+                entity_b,
+                window,
+            } => {
+                handlers::analyze::handle_convergence(
+                    ctx,
+                    entity_a,
+                    entity_b,
+                    *window,
+                    mode,
+                    no_semantic,
+                )
+                .await?
+            }
+            AnalyzeCommands::Midpoint {
+                entity_a,
+                entity_b,
+                limit,
+            } => {
+                handlers::analyze::handle_midpoint(
+                    ctx,
+                    entity_a,
+                    entity_b,
+                    *limit,
+                    mode,
+                    no_semantic,
+                )
+                .await?
+            }
+            AnalyzeCommands::Facets { character } => {
+                handlers::analyze::handle_facets(ctx, character, mode, no_semantic).await?
             }
         },
 
@@ -1570,7 +1678,7 @@ pub async fn execute(
         // Legacy top-level aliases → world commands
         Commands::Health => handlers::world::handle_health(ctx, mode).await?,
         Commands::Backfill { entity_type } => {
-            handlers::world::handle_backfill(ctx, entity_type.as_deref(), mode).await?
+            handlers::world::handle_backfill(ctx, entity_type.as_deref(), false, mode).await?
         }
         Commands::Export { output } => {
             handlers::world::handle_export(ctx, output.as_deref(), mode).await?

@@ -86,13 +86,23 @@ pub async fn handle_status(ctx: &AppContext, mode: OutputMode) -> Result<()> {
 
     let embedding_available = ctx.embedding_service.is_available();
     let dimensions = ctx.embedding_service.dimensions();
+    let model_id = ctx.embedding_service.model_id();
+    let provider = ctx.embedding_service.provider_name();
+
+    let model_mismatch = matches!(
+        ctx.embedding_model_mismatch,
+        crate::embedding::provider::ModelMatch::Mismatch { .. }
+    );
 
     if mode == OutputMode::Json {
         let json = serde_json::json!({
             "data_path": ctx.data_path.display().to_string(),
             "entities": statuses,
             "embedding_available": embedding_available,
+            "embedding_model": model_id,
+            "embedding_provider": provider,
             "embedding_dimensions": dimensions,
+            "embedding_model_mismatch": model_mismatch,
             "stale_count": total_stale,
         });
         output_json(&json);
@@ -119,7 +129,9 @@ pub async fn handle_status(ctx: &AppContext, mode: OutputMode) -> Result<()> {
     println!();
     if embedding_available {
         println!(
-            "  Embedding Model: BGE-small-en-v1.5 ({} dims) {}",
+            "  Embedding Model: {} via {} ({} dims) {}",
+            model_id,
+            provider,
             dimensions,
             "OK".green()
         );
@@ -129,6 +141,25 @@ pub async fn handle_status(ctx: &AppContext, mode: OutputMode) -> Result<()> {
             "unavailable".yellow(),
             "(semantic search disabled)".dimmed()
         );
+    }
+    if model_mismatch {
+        if let crate::embedding::provider::ModelMatch::Mismatch {
+            stored_model,
+            current_model,
+            ..
+        } = &ctx.embedding_model_mismatch
+        {
+            println!(
+                "  {} Model mismatch: world embedded with '{}', current is '{}'",
+                "WARNING:".yellow().bold(),
+                stored_model,
+                current_model
+            );
+            println!(
+                "  {}",
+                "Run 'narra world backfill --force' to re-embed.".dimmed()
+            );
+        }
     }
     if total_stale > 0 {
         println!(
@@ -230,9 +261,33 @@ pub async fn handle_health(ctx: &AppContext, mode: OutputMode) -> Result<()> {
 pub async fn handle_backfill(
     ctx: &AppContext,
     _entity_type: Option<&str>,
+    force: bool,
     mode: OutputMode,
 ) -> Result<()> {
     use crate::embedding::BackfillService;
+
+    // If --force, mark all entities as needing re-embedding
+    if force {
+        let tables = [
+            "character",
+            "location",
+            "event",
+            "scene",
+            "knowledge",
+            "perceives",
+            "relates_to",
+        ];
+        for table in &tables {
+            let query = format!(
+                "UPDATE {} SET embedding_stale = true WHERE embedding IS NOT NONE",
+                table
+            );
+            ctx.db.query(&query).await?;
+        }
+        if mode != OutputMode::Json {
+            println!("Marked all entities as stale for re-embedding.");
+        }
+    }
 
     let spinner = create_spinner("Generating embeddings...");
 

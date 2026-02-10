@@ -2,6 +2,8 @@
 //!
 //! Tracks when entity embeddings need regeneration and handles background updates.
 
+#![allow(clippy::needless_borrows_for_generic_args)]
+
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -77,6 +79,60 @@ impl StalenessManager {
         })?;
 
         info!("Marked {} as stale", entity_id);
+        Ok(())
+    }
+
+    /// Mark specific character facets as stale.
+    ///
+    /// # Arguments
+    ///
+    /// * `entity_id` - Character ID in format "character:key"
+    /// * `facets` - List of facet names to mark stale: "identity", "psychology", "social", "narrative"
+    ///
+    /// # Returns
+    ///
+    /// Ok(()) if facets were marked stale, Err if operation failed.
+    pub async fn mark_facets_stale(
+        &self,
+        entity_id: &str,
+        facets: &[&str],
+    ) -> Result<(), NarraError> {
+        if !entity_id.starts_with("character:") {
+            return Err(NarraError::Validation(format!(
+                "Facets only supported for characters, got: {}",
+                entity_id
+            )));
+        }
+
+        if facets.is_empty() {
+            return Ok(());
+        }
+
+        // Validate facet names
+        for facet in facets {
+            if !["identity", "psychology", "social", "narrative"].contains(facet) {
+                return Err(NarraError::Validation(format!(
+                    "Invalid facet: {}. Valid facets: identity, psychology, social, narrative",
+                    facet
+                )));
+            }
+        }
+
+        // Build SET clauses for all facets
+        let set_clauses: Vec<String> = facets
+            .iter()
+            .map(|facet| format!("{}_stale = true", facet))
+            .collect();
+
+        let query = format!("UPDATE {} SET {}", entity_id, set_clauses.join(", "));
+        self.db.query(query).await.map_err(|e| {
+            NarraError::Database(format!(
+                "Failed to mark facets {:?} stale for {}: {}",
+                facets, entity_id, e
+            ))
+        })?;
+
+        info!("Marked facets {:?} as stale for {}", facets, entity_id);
         Ok(())
     }
 
@@ -241,9 +297,318 @@ impl StalenessManager {
         )
         .await
     }
+
+    /// Regenerate specific character facet embeddings (synchronous, awaitable).
+    ///
+    /// # Arguments
+    ///
+    /// * `entity_id` - Character ID in format "character:key"
+    /// * `facet` - Facet name: "identity", "psychology", "social", "narrative"
+    /// * `event_id` - Optional event ID to link to the arc snapshot
+    ///
+    /// # Returns
+    ///
+    /// Ok(()) if facet embedding was regenerated, Err if operation failed.
+    pub async fn regenerate_facet_embedding(
+        &self,
+        entity_id: &str,
+        facet: &str,
+        event_id: Option<String>,
+    ) -> Result<(), NarraError> {
+        if !entity_id.starts_with("character:") {
+            return Err(NarraError::Validation(format!(
+                "Facets only supported for characters, got: {}",
+                entity_id
+            )));
+        }
+
+        if !["identity", "psychology", "social", "narrative"].contains(&facet) {
+            return Err(NarraError::Validation(format!(
+                "Invalid facet: {}. Valid facets: identity, psychology, social, narrative",
+                facet
+            )));
+        }
+
+        regenerate_facet_embedding_internal(
+            self.db.clone(),
+            self.embedding_service.clone(),
+            entity_id,
+            facet,
+            event_id,
+        )
+        .await
+    }
 }
 
 use super::queries::{fetch_knowledge_about, fetch_shared_scenes};
+use crate::embedding::composite::{
+    identity_composite, narrative_composite, psychology_composite, social_composite,
+};
+
+/// Internal function to regenerate a character facet embedding.
+async fn regenerate_facet_embedding_internal(
+    db: Arc<Surreal<Db>>,
+    embedding_service: Arc<dyn EmbeddingService + Send + Sync>,
+    entity_id: &str,
+    facet: &str,
+    event_id: Option<String>,
+) -> Result<(), NarraError> {
+    // Check if embedding service is available
+    if !embedding_service.is_available() {
+        return Err(NarraError::Database(
+            "Embedding service is not available".to_string(),
+        ));
+    }
+
+    // Parse entity_id into RecordId for parameterized queries
+    let entity_ref = {
+        let (table, key) = entity_id
+            .split_once(':')
+            .ok_or_else(|| NarraError::Validation(format!("Invalid entity ID: {}", entity_id)))?;
+        surrealdb::RecordId::from((table, key))
+    };
+
+    // Fetch old facet embedding before regeneration
+    let old_embedding: Option<Vec<f32>> = {
+        #[derive(serde::Deserialize)]
+        struct EmbRow {
+            embedding: Option<Vec<f32>>,
+        }
+        let facet_field = format!("{}_embedding", facet);
+        let mut result = db
+            .query(&format!(
+                "SELECT {} AS embedding FROM ONLY $ref",
+                facet_field
+            ))
+            .bind(("ref", entity_ref.clone()))
+            .await
+            .map_err(|e| {
+                NarraError::Database(format!("Failed to fetch old facet embedding: {}", e))
+            })?;
+        let row: Option<EmbRow> = result.take(0).unwrap_or(None);
+        row.and_then(|r| r.embedding)
+    };
+
+    // Fetch character entity
+    let mut result = db
+        .query("SELECT * FROM ONLY $ref")
+        .bind(("ref", entity_ref.clone()))
+        .await
+        .map_err(|e| NarraError::Database(format!("Failed to fetch character: {}", e)))?;
+
+    let character: Option<Character> = result
+        .take(0)
+        .map_err(|e| NarraError::Database(format!("Failed to parse character: {}", e)))?;
+
+    let character = character
+        .ok_or_else(|| NarraError::Database(format!("Character not found: {}", entity_id)))?;
+
+    // Build facet composite text
+    let composite_text = match facet {
+        "identity" => identity_composite(&character),
+        "psychology" => psychology_composite(&character),
+        "social" => {
+            // Fetch relationships (outbound)
+            let mut rel_result = db
+                .query(
+                    "SELECT ->relates_to.rel_type AS rel_type, ->relates_to->character.name AS target_name \
+                     FROM ONLY $ref",
+                )
+                .bind(("ref", entity_ref.clone()))
+                .await
+                .map_err(|e| NarraError::Database(format!("Failed to fetch relationships: {}", e)))?;
+
+            #[derive(serde::Deserialize)]
+            struct RelResult {
+                rel_type: Option<Vec<String>>,
+                target_name: Option<Vec<String>>,
+            }
+
+            let rel_data: Option<RelResult> = rel_result.take(0).unwrap_or(None);
+            let relationships: Vec<(String, String)> = if let Some(data) = rel_data {
+                data.rel_type
+                    .unwrap_or_default()
+                    .into_iter()
+                    .zip(data.target_name.unwrap_or_default())
+                    .collect()
+            } else {
+                vec![]
+            };
+
+            // Fetch inbound perceptions (how others see this character)
+            #[derive(serde::Deserialize)]
+            struct PerceptionRecord {
+                observer_name: Option<String>,
+                perception: Option<String>,
+            }
+
+            let mut perc_result = db
+                .query(
+                    "SELECT in.name AS observer_name, perception FROM perceives WHERE out = $ref",
+                )
+                .bind(("ref", entity_ref.clone()))
+                .await
+                .map_err(|e| NarraError::Database(format!("Failed to fetch perceptions: {}", e)))?;
+
+            let perc_records: Vec<PerceptionRecord> = perc_result.take(0).unwrap_or_default();
+            let perceptions_of: Vec<(String, String)> = perc_records
+                .into_iter()
+                .filter_map(|p| Some((p.observer_name?, p.perception?)))
+                .collect();
+
+            social_composite(&character, &relationships, &perceptions_of)
+        }
+        "narrative" => {
+            // Fetch scene participation
+            #[derive(serde::Deserialize)]
+            struct SceneRecord {
+                scene_title: Option<String>,
+                scene_summary: Option<String>,
+            }
+
+            let mut scene_result = db
+                .query(
+                    "SELECT out.title AS scene_title, out.summary AS scene_summary \
+                     FROM participates_in WHERE in = $ref",
+                )
+                .bind(("ref", entity_ref.clone()))
+                .await
+                .map_err(|e| NarraError::Database(format!("Failed to fetch scenes: {}", e)))?;
+
+            let scene_records: Vec<SceneRecord> = scene_result.take(0).unwrap_or_default();
+            let scenes: Vec<(String, Option<String>)> = scene_records
+                .into_iter()
+                .filter_map(|s| Some((s.scene_title?, s.scene_summary)))
+                .collect();
+
+            // Fetch knowledge held by character
+            #[derive(serde::Deserialize)]
+            struct KnowledgeRecord {
+                fact: Option<String>,
+                certainty: Option<String>,
+            }
+
+            let mut knowledge_result = db
+                .query(
+                    "SELECT out.fact AS fact, certainty FROM knows WHERE in = $ref \
+                     ORDER BY learned_at DESC LIMIT 20",
+                )
+                .bind(("ref", entity_ref.clone()))
+                .await
+                .map_err(|e| NarraError::Database(format!("Failed to fetch knowledge: {}", e)))?;
+
+            let knowledge_records: Vec<KnowledgeRecord> =
+                knowledge_result.take(0).unwrap_or_default();
+            let knowledge: Vec<(String, String)> = knowledge_records
+                .into_iter()
+                .filter_map(|k| Some((k.fact?, k.certainty.unwrap_or_else(|| "knows".to_string()))))
+                .collect();
+
+            narrative_composite(&character.name, &scenes, &knowledge)
+        }
+        _ => return Err(NarraError::Validation(format!("Invalid facet: {}", facet))),
+    };
+
+    // No-op detection: skip re-embedding if composite text hasn't changed
+    {
+        #[derive(serde::Deserialize)]
+        struct CompositeRow {
+            composite_text: Option<String>,
+        }
+        let facet_field = format!("{}_composite", facet);
+        let mut r = db
+            .query(&format!(
+                "SELECT {} AS composite_text FROM ONLY $ref",
+                facet_field
+            ))
+            .bind(("ref", entity_ref.clone()))
+            .await
+            .map_err(|e| NarraError::Database(format!("Failed to fetch composite_text: {}", e)))?;
+        let stored_composite: Option<String> = r
+            .take::<Option<CompositeRow>>(0)
+            .unwrap_or(None)
+            .and_then(|r| r.composite_text);
+
+        if stored_composite.as_deref() == Some(&composite_text) {
+            // Composite unchanged — clear stale flag without re-embedding
+            let clear_query = format!("UPDATE ONLY $ref SET {}_stale = false", facet);
+            db.query(&clear_query)
+                .bind(("ref", entity_ref.clone()))
+                .await
+                .map_err(|e| NarraError::Database(format!("Failed to clear stale flag: {}", e)))?;
+            info!(
+                "Skipped re-embedding {} facet {} (composite unchanged)",
+                entity_id, facet
+            );
+            return Ok(());
+        }
+    }
+
+    // Generate embedding
+    let embedding = embedding_service
+        .embed_text(&composite_text)
+        .await
+        .map_err(|e| NarraError::Database(format!("Failed to generate facet embedding: {}", e)))?;
+
+    // Create arc snapshot for this facet
+    let delta_magnitude = old_embedding
+        .as_ref()
+        .map(|old| 1.0 - crate::utils::math::cosine_similarity(old, &embedding));
+
+    let event_ref: Option<surrealdb::RecordId> = match &event_id {
+        Some(eid) if eid.starts_with("event:") => {
+            let key = eid.strip_prefix("event:").unwrap_or(eid);
+            Some(surrealdb::RecordId::from(("event", key)))
+        }
+        Some(eid) => Some(surrealdb::RecordId::from(("event", eid.as_str()))),
+        None => None,
+    };
+
+    if let Err(e) = db
+        .query(
+            "CREATE arc_snapshot SET entity_id = $eid, entity_type = 'character', \
+             facet = $facet, embedding = $snap_embedding, delta_magnitude = $delta_magnitude, \
+             event_id = $event_ref",
+        )
+        .bind(("eid", entity_ref.clone()))
+        .bind(("facet", facet.to_string()))
+        .bind(("snap_embedding", embedding.clone()))
+        .bind(("delta_magnitude", delta_magnitude))
+        .bind(("event_ref", event_ref))
+        .await
+    {
+        warn!(
+            "Failed to create arc snapshot for {} facet {}: {}",
+            entity_id, facet, e
+        );
+    }
+
+    // Update character with new facet embedding + composite text
+    let update_query = format!(
+        "UPDATE ONLY $ref SET {}_embedding = $embedding, {}_stale = false, {}_composite = $composite_text",
+        facet, facet, facet
+    );
+    db.query(&update_query)
+        .bind(("ref", entity_ref))
+        .bind(("embedding", embedding))
+        .bind(("composite_text", composite_text.clone()))
+        .await
+        .map_err(|e| {
+            NarraError::Database(format!(
+                "Failed to update {} facet for {}: {}",
+                facet, entity_id, e
+            ))
+        })?;
+
+    info!(
+        "Regenerated {} facet for {} ({} chars)",
+        facet,
+        entity_id,
+        composite_text.len()
+    );
+
+    Ok(())
+}
 
 /// Internal function to regenerate embedding.
 ///

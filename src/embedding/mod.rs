@@ -7,7 +7,9 @@
 pub mod backfill;
 pub mod composite;
 pub mod model;
+pub mod provider;
 pub mod queries;
+pub mod reranker;
 pub mod staleness;
 
 use async_trait::async_trait;
@@ -16,6 +18,7 @@ use crate::NarraError;
 
 pub use backfill::{BackfillService, BackfillStats};
 pub use model::{EmbeddingConfig, LocalEmbeddingService};
+pub use provider::EmbeddingProviderConfig;
 pub use staleness::StalenessManager;
 
 /// No-op embedding service for testing.
@@ -57,6 +60,14 @@ impl EmbeddingService for NoopEmbeddingService {
     fn is_available(&self) -> bool {
         false
     }
+
+    fn model_id(&self) -> &str {
+        "noop"
+    }
+
+    fn provider_name(&self) -> &str {
+        "noop"
+    }
 }
 
 /// Service trait for generating text embeddings.
@@ -96,4 +107,10 @@ pub trait EmbeddingService: Send + Sync {
     ///
     /// Returns false if model failed to load (e.g., no internet on first run).
     fn is_available(&self) -> bool;
+
+    /// Get the model identifier (e.g., "bge-small-en-v1.5").
+    fn model_id(&self) -> &str;
+
+    /// Get the provider name (e.g., "fastembed", "openai", "noop").
+    fn provider_name(&self) -> &str;
 }

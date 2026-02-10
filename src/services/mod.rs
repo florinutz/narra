@@ -13,9 +13,12 @@ pub mod irony;
 pub mod perception;
 pub mod search;
 pub mod summary;
+pub mod vector_ops;
 
 pub use clustering::{ClusteringResult, ClusteringService, ThemeCluster};
-pub use composite::{CharacterDossier, CompositeIntelligenceService, ScenePlan, SituationReport};
+pub use composite::{
+    CharacterDossier, CompositeIntelligenceService, NarrativeMomentum, ScenePlan, SituationReport,
+};
 pub use consistency::{
     generate_suggested_fix, ConsistencyChecker, ConsistencyService, ConsistencySeverity,
     ValidationResult, Violation,
@@ -43,4 +46,7 @@ pub use summary::{
 pub use arc::{ArcComparisonResult, ArcHistoryResult, ArcMomentResult, ArcService};
 pub use perception::{
     PerceptionGapResult, PerceptionMatrixResult, PerceptionService, PerceptionShiftResult,
+};
+pub use vector_ops::{
+    ConvergenceResult, GrowthVectorResult, MidpointResult, MisperceptionResult, VectorOpsService,
 };

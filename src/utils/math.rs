@@ -18,6 +18,31 @@ pub fn vector_subtract(a: &[f32], b: &[f32]) -> Vec<f32> {
     a.iter().zip(b.iter()).map(|(x, y)| x - y).collect()
 }
 
+/// Element-wise vector addition: a + b.
+pub fn vector_add(a: &[f32], b: &[f32]) -> Vec<f32> {
+    a.iter().zip(b.iter()).map(|(x, y)| x + y).collect()
+}
+
+/// Scale a vector by a scalar: s * v.
+pub fn vector_scale(v: &[f32], s: f32) -> Vec<f32> {
+    v.iter().map(|x| x * s).collect()
+}
+
+/// Normalize a vector to unit length. Returns zero vector if input has zero norm.
+pub fn vector_normalize(v: &[f32]) -> Vec<f32> {
+    let norm: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if norm == 0.0 {
+        vec![0.0; v.len()]
+    } else {
+        v.iter().map(|x| x / norm).collect()
+    }
+}
+
+/// Compute the midpoint of two vectors: (a + b) / 2.
+pub fn vector_midpoint(a: &[f32], b: &[f32]) -> Vec<f32> {
+    vector_scale(&vector_add(a, b), 0.5)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -125,6 +150,48 @@ mod tests {
             (traj_sim - 1.0).abs() < 1e-5,
             "Same-direction trajectories should have sim=1.0, got {traj_sim}",
         );
+    }
+
+    #[test]
+    fn test_vector_add_basic() {
+        let a = vec![1.0, 2.0, 3.0];
+        let b = vec![4.0, 5.0, 6.0];
+        assert_eq!(vector_add(&a, &b), vec![5.0, 7.0, 9.0]);
+    }
+
+    #[test]
+    fn test_vector_scale_double() {
+        let v = vec![1.0, 2.0, 3.0];
+        assert_eq!(vector_scale(&v, 2.0), vec![2.0, 4.0, 6.0]);
+    }
+
+    #[test]
+    fn test_vector_scale_zero() {
+        let v = vec![1.0, 2.0, 3.0];
+        assert_eq!(vector_scale(&v, 0.0), vec![0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn test_vector_normalize_unit() {
+        let v = vec![3.0, 4.0];
+        let n = vector_normalize(&v);
+        assert!((n[0] - 0.6).abs() < 1e-6);
+        assert!((n[1] - 0.8).abs() < 1e-6);
+        let norm: f32 = n.iter().map(|x| x * x).sum::<f32>().sqrt();
+        assert!((norm - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_vector_normalize_zero() {
+        let v = vec![0.0, 0.0];
+        assert_eq!(vector_normalize(&v), vec![0.0, 0.0]);
+    }
+
+    #[test]
+    fn test_vector_midpoint() {
+        let a = vec![0.0, 0.0];
+        let b = vec![4.0, 6.0];
+        assert_eq!(vector_midpoint(&a, &b), vec![2.0, 3.0]);
     }
 
     #[test]

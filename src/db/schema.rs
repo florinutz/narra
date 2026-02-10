@@ -45,6 +45,15 @@ const SCHEMA_013: &str = include_str!("migrations/013_embedding_infra.surql");
 /// Character profile: replace typed wounds/desires/contradictions with flexible profile HashMap
 const SCHEMA_014: &str = include_str!("migrations/014_character_profile.surql");
 
+/// Drop unused HNSW vector indexes (brute-force cosine is reliable + fast at narrative scale)
+const SCHEMA_015: &str = include_str!("migrations/015_drop_hnsw_indexes.surql");
+
+/// Embedding metadata: world_meta table for model/dimensions/provider tracking
+const SCHEMA_016: &str = include_str!("migrations/016_embedding_metadata.surql");
+
+/// Character facets: multi-vector embeddings for faceted search
+const SCHEMA_017: &str = include_str!("migrations/017_character_facets.surql");
+
 /// Apply the database schema to an initialized database connection.
 ///
 /// This executes all DEFINE statements in the schema files, creating tables,
@@ -63,6 +72,9 @@ const SCHEMA_014: &str = include_str!("migrations/014_character_profile.surql");
 /// - 012: Perspective embeddings (per-observer view embeddings on perceives edges)
 /// - 013: Embedding infrastructure (relates_to embeddings + composite_text storage)
 /// - 014: Character profile (replace wounds/desires/contradictions with flexible profile)
+/// - 015: Drop unused HNSW vector indexes (brute-force cosine at narrative scale)
+/// - 016: Embedding metadata (world_meta table for model/dimensions/provider tracking)
+/// - 017: Character facets (multi-vector embeddings for faceted search)
 ///
 /// It's safe to call multiple times - SurrealDB will update existing definitions
 /// rather than fail.
@@ -100,5 +112,8 @@ pub async fn apply_schema(db: &Surreal<Db>) -> Result<(), NarraError> {
     db.query(SCHEMA_012).await?;
     db.query(SCHEMA_013).await?;
     db.query(SCHEMA_014).await?;
+    db.query(SCHEMA_015).await?;
+    db.query(SCHEMA_016).await?;
+    db.query(SCHEMA_017).await?;
     Ok(())
 }

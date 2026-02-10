@@ -4,14 +4,14 @@ use anyhow::Result;
 use serde::Serialize;
 
 use crate::cli::output::{
-    output_json, output_json_list, print_header, print_kv, print_table, OutputMode,
+    output_json, output_json_list, print_header, print_hint, print_kv, print_table, OutputMode,
 };
 use crate::cli::resolve::resolve_single;
 use crate::init::AppContext;
 use crate::repository::KnowledgeRepository;
 use crate::services::{
     generate_suggested_fix, CentralityMetric, ClusteringService, CompositeIntelligenceService,
-    EntityType, GraphAnalyticsService, InfluenceService, IronyService,
+    EntityType, GraphAnalyticsService, InfluenceService, IronyService, VectorOpsService,
 };
 
 pub async fn handle_centrality(
@@ -1051,6 +1051,373 @@ pub async fn handle_impact(
             }
         }
     }
+
+    Ok(())
+}
+
+// =============================================================================
+// Phase 2: Vector arithmetic analysis commands
+// =============================================================================
+
+pub async fn handle_growth_vector(
+    ctx: &AppContext,
+    entity: &str,
+    limit: usize,
+    mode: OutputMode,
+    no_semantic: bool,
+) -> Result<()> {
+    let entity_id = resolve_single(ctx, entity, no_semantic).await?;
+    let service = VectorOpsService::new(ctx.db.clone());
+    let result = service
+        .growth_vector(&entity_id, limit)
+        .await
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
+
+    if mode == OutputMode::Json {
+        output_json(&result);
+    } else {
+        print_header(&format!("Growth Vector: {}", result.entity_name));
+        print_kv("Snapshots", &result.snapshot_count.to_string());
+        print_kv("Total drift", &format!("{:.4}", result.total_drift));
+        if !result.trajectory_neighbors.is_empty() {
+            println!(
+                "\n  Trajectory neighbors (where {} is heading):",
+                result.entity_name
+            );
+            let rows: Vec<Vec<String>> = result
+                .trajectory_neighbors
+                .iter()
+                .map(|n| {
+                    vec![
+                        n.entity_id.clone(),
+                        n.entity_name.clone(),
+                        n.entity_type.clone(),
+                        format!("{:.4}", n.alignment_score),
+                    ]
+                })
+                .collect();
+            print_table(&["ID", "Name", "Type", "Alignment"], rows);
+        }
+    }
+
+    Ok(())
+}
+
+pub async fn handle_misperception(
+    ctx: &AppContext,
+    observer: &str,
+    target: &str,
+    limit: usize,
+    mode: OutputMode,
+    no_semantic: bool,
+) -> Result<()> {
+    let observer_id = resolve_single(ctx, observer, no_semantic).await?;
+    let target_id = resolve_single(ctx, target, no_semantic).await?;
+    let service = VectorOpsService::new(ctx.db.clone());
+    let result = service
+        .misperception_vector(&observer_id, &target_id, limit)
+        .await
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
+
+    if mode == OutputMode::Json {
+        output_json(&result);
+    } else {
+        print_header(&format!(
+            "Misperception: {} -> {}",
+            result.observer_name, result.target_name
+        ));
+        print_kv("Perception gap", &format!("{:.4}", result.perception_gap));
+        if !result.misperception_neighbors.is_empty() {
+            println!("\n  Misperception direction neighbors:");
+            let rows: Vec<Vec<String>> = result
+                .misperception_neighbors
+                .iter()
+                .map(|n| {
+                    vec![
+                        n.entity_id.clone(),
+                        n.entity_name.clone(),
+                        n.entity_type.clone(),
+                        format!("{:.4}", n.alignment_score),
+                    ]
+                })
+                .collect();
+            print_table(&["ID", "Name", "Type", "Alignment"], rows);
+        }
+    }
+
+    Ok(())
+}
+
+pub async fn handle_convergence(
+    ctx: &AppContext,
+    entity_a: &str,
+    entity_b: &str,
+    window: Option<usize>,
+    mode: OutputMode,
+    no_semantic: bool,
+) -> Result<()> {
+    let id_a = resolve_single(ctx, entity_a, no_semantic).await?;
+    let id_b = resolve_single(ctx, entity_b, no_semantic).await?;
+    let service = VectorOpsService::new(ctx.db.clone());
+    let result = service
+        .convergence_analysis(&id_a, &id_b, window)
+        .await
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
+
+    if mode == OutputMode::Json {
+        output_json(&result);
+    } else {
+        print_header(&format!(
+            "Convergence: {} <-> {}",
+            result.entity_a_name, result.entity_b_name
+        ));
+        print_kv(
+            "Current similarity",
+            &format!("{:.4}", result.current_similarity),
+        );
+        print_kv(
+            "Convergence rate",
+            &format!(
+                "{:.6} ({})",
+                result.convergence_rate,
+                if result.convergence_rate > 0.001 {
+                    "converging"
+                } else if result.convergence_rate < -0.001 {
+                    "diverging"
+                } else {
+                    "stable"
+                }
+            ),
+        );
+        if !result.trend.is_empty() {
+            println!("\n  Similarity trend:");
+            let rows: Vec<Vec<String>> = result
+                .trend
+                .iter()
+                .map(|p| {
+                    vec![
+                        p.snapshot_index.to_string(),
+                        format!("{:.4}", p.similarity),
+                        p.event_label.clone().unwrap_or_default(),
+                    ]
+                })
+                .collect();
+            print_table(&["#", "Similarity", "Event"], rows);
+        }
+    }
+
+    Ok(())
+}
+
+pub async fn handle_midpoint(
+    ctx: &AppContext,
+    entity_a: &str,
+    entity_b: &str,
+    limit: usize,
+    mode: OutputMode,
+    no_semantic: bool,
+) -> Result<()> {
+    let id_a = resolve_single(ctx, entity_a, no_semantic).await?;
+    let id_b = resolve_single(ctx, entity_b, no_semantic).await?;
+    let service = VectorOpsService::new(ctx.db.clone());
+    let result = service
+        .semantic_midpoint(&id_a, &id_b, limit)
+        .await
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
+
+    if mode == OutputMode::Json {
+        output_json(&result);
+    } else {
+        print_header(&format!(
+            "Semantic Midpoint: {} <-> {}",
+            result.entity_a_id, result.entity_b_id
+        ));
+        if result.neighbors.is_empty() {
+            println!("  No neighbors found (entities may lack embeddings).");
+        } else {
+            let rows: Vec<Vec<String>> = result
+                .neighbors
+                .iter()
+                .map(|n| {
+                    vec![
+                        n.entity_id.clone(),
+                        n.entity_name.clone(),
+                        n.entity_type.clone(),
+                        format!("{:.4}", n.alignment_score),
+                    ]
+                })
+                .collect();
+            print_table(&["ID", "Name", "Type", "Similarity"], rows);
+        }
+    }
+
+    Ok(())
+}
+
+pub async fn handle_facets(
+    ctx: &AppContext,
+    character: &str,
+    mode: OutputMode,
+    no_semantic: bool,
+) -> Result<()> {
+    let character_id = resolve_single(ctx, character, no_semantic).await?;
+
+    // Fetch character with all facet embeddings and composites
+    #[derive(serde::Deserialize)]
+    struct FacetData {
+        name: String,
+        identity_embedding: Option<Vec<f32>>,
+        identity_composite: Option<String>,
+        identity_stale: Option<bool>,
+        psychology_embedding: Option<Vec<f32>>,
+        psychology_composite: Option<String>,
+        psychology_stale: Option<bool>,
+        social_embedding: Option<Vec<f32>>,
+        social_composite: Option<String>,
+        social_stale: Option<bool>,
+        narrative_embedding: Option<Vec<f32>>,
+        narrative_composite: Option<String>,
+        narrative_stale: Option<bool>,
+    }
+
+    let query = format!(
+        "SELECT name, identity_embedding, identity_composite, identity_stale, \
+         psychology_embedding, psychology_composite, psychology_stale, \
+         social_embedding, social_composite, social_stale, \
+         narrative_embedding, narrative_composite, narrative_stale FROM {}",
+        character_id
+    );
+
+    let mut resp = ctx.db.query(&query).await?;
+    let facet_data: Option<FacetData> = resp.take(0)?;
+
+    let facet_data =
+        facet_data.ok_or_else(|| anyhow::anyhow!("Character not found: {}", character_id))?;
+
+    if mode == OutputMode::Json {
+        // Build JSON structure
+        use serde_json::json;
+        let output = json!({
+            "character_id": character_id,
+            "character_name": facet_data.name,
+            "facets": {
+                "identity": {
+                    "status": if facet_data.identity_stale.unwrap_or(false) { "stale" } else if facet_data.identity_embedding.is_some() { "ok" } else { "missing" },
+                    "composite": facet_data.identity_composite,
+                },
+                "psychology": {
+                    "status": if facet_data.psychology_stale.unwrap_or(false) { "stale" } else if facet_data.psychology_embedding.is_some() { "ok" } else { "missing" },
+                    "composite": facet_data.psychology_composite,
+                },
+                "social": {
+                    "status": if facet_data.social_stale.unwrap_or(false) { "stale" } else if facet_data.social_embedding.is_some() { "ok" } else { "missing" },
+                    "composite": facet_data.social_composite,
+                },
+                "narrative": {
+                    "status": if facet_data.narrative_stale.unwrap_or(false) { "stale" } else if facet_data.narrative_embedding.is_some() { "ok" } else { "missing" },
+                    "composite": facet_data.narrative_composite,
+                }
+            }
+        });
+        output_json(&output);
+        return Ok(());
+    }
+
+    print_header(&format!("Character Facets: {}", facet_data.name));
+
+    // Compute inter-facet similarities
+    let facets = [
+        ("identity", &facet_data.identity_embedding),
+        ("psychology", &facet_data.psychology_embedding),
+        ("social", &facet_data.social_embedding),
+        ("narrative", &facet_data.narrative_embedding),
+    ];
+
+    let mut similarities = Vec::new();
+    for i in 0..facets.len() {
+        for j in (i + 1)..facets.len() {
+            if let (Some(emb_a), Some(emb_b)) = (facets[i].1, facets[j].1) {
+                let sim = crate::utils::math::cosine_similarity(emb_a, emb_b);
+                similarities.push((facets[i].0, facets[j].0, sim));
+            }
+        }
+    }
+
+    // Print facet status table
+    let mut rows = Vec::new();
+    for (facet_name, embedding_opt) in &facets {
+        let (status, composite) = match *facet_name {
+            "identity" => (
+                if facet_data.identity_stale.unwrap_or(false) {
+                    "STALE"
+                } else if embedding_opt.is_some() {
+                    "OK"
+                } else {
+                    "MISSING"
+                },
+                facet_data.identity_composite.as_deref(),
+            ),
+            "psychology" => (
+                if facet_data.psychology_stale.unwrap_or(false) {
+                    "STALE"
+                } else if embedding_opt.is_some() {
+                    "OK"
+                } else {
+                    "MISSING"
+                },
+                facet_data.psychology_composite.as_deref(),
+            ),
+            "social" => (
+                if facet_data.social_stale.unwrap_or(false) {
+                    "STALE"
+                } else if embedding_opt.is_some() {
+                    "OK"
+                } else {
+                    "MISSING"
+                },
+                facet_data.social_composite.as_deref(),
+            ),
+            "narrative" => (
+                if facet_data.narrative_stale.unwrap_or(false) {
+                    "STALE"
+                } else if embedding_opt.is_some() {
+                    "OK"
+                } else {
+                    "MISSING"
+                },
+                facet_data.narrative_composite.as_deref(),
+            ),
+            _ => ("UNKNOWN", None),
+        };
+
+        let composite_preview = composite
+            .map(|c| {
+                if c.len() > 60 {
+                    format!("{}...", &c[..60])
+                } else {
+                    c.to_string()
+                }
+            })
+            .unwrap_or_else(|| "-".to_string());
+
+        rows.push(vec![
+            facet_name.to_string(),
+            status.to_string(),
+            composite_preview,
+        ]);
+    }
+
+    print_table(&["Facet", "Status", "Composite (preview)"], rows);
+
+    // Print inter-facet similarities
+    if !similarities.is_empty() {
+        println!("\nInter-facet Similarities:");
+        for (facet_a, facet_b, sim) in similarities {
+            println!("  {} <-> {}: {:.4}", facet_a, facet_b, sim);
+        }
+    }
+
+    print_hint("Use 'narra find --facet <facet_name> <query>' to search by specific facet");
 
     Ok(())
 }
