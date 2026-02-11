@@ -15,7 +15,7 @@ use crate::repository::{
 };
 use crate::services::{
     CachedContextService, CachedSummaryService, ConsistencyChecker, ConsistencyService,
-    ContextService, ImpactAnalyzer, ImpactService, SearchService, SummaryService,
+    ContextService, EmotionService, ImpactAnalyzer, ImpactService, SearchService, SummaryService,
     SurrealSearchService,
 };
 use crate::session::SessionStateManager;
@@ -37,6 +37,7 @@ pub struct AppContext {
     pub relationship_repo: Arc<SurrealRelationshipRepository>,
     pub knowledge_repo: Arc<SurrealKnowledgeRepository>,
     pub staleness_manager: Arc<StalenessManager>,
+    pub emotion_service: Arc<dyn EmotionService + Send + Sync>,
     /// Whether the current embedding model mismatches stored world metadata.
     pub embedding_model_mismatch: ModelMatch,
 }
@@ -164,6 +165,19 @@ impl AppContext {
         let staleness_manager =
             Arc::new(StalenessManager::new(db.clone(), embedding_service.clone()));
 
+        // Emotion classifier — loads model eagerly, degrades gracefully if unavailable.
+        let emotion_service: Arc<dyn EmotionService + Send + Sync> = {
+            let service = crate::services::LocalEmotionService::new(db.clone());
+            if service.is_available() {
+                Arc::new(service)
+            } else {
+                tracing::info!(
+                    "Emotion classifier not available, using noop (emotion queries will return errors)"
+                );
+                Arc::new(crate::services::NoopEmotionService::new())
+            }
+        };
+
         Ok(Self {
             db,
             data_path,
@@ -178,6 +192,7 @@ impl AppContext {
             relationship_repo,
             knowledge_repo,
             staleness_manager,
+            emotion_service,
             embedding_model_mismatch,
         })
     }

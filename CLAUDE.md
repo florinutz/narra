@@ -62,6 +62,23 @@ pub enum QueryRequest { Lookup { ... }, Search { ... }, ... }
 ```
 Tool handler implementations are split across `mcp/tools/*.rs` files (query.rs, mutate.rs, validate.rs, etc.) but the `#[tool]` macro declarations must remain in the `#[tool_router] impl NarraServer` block in `server.rs`.
 
+### MCP Schema Constraint (CRITICAL)
+
+**Claude Code rejects MCP tools whose JSON Schema contains `oneOf`, `anyOf`, `allOf`, or `$ref`.** All dedicated tool input structs (the `*Input` types in `mcp/types.rs`) must produce flat `{"type": "object"}` schemas with only primitive property types.
+
+**What breaks:** `schemars` generates `oneOf` for Rust enums with per-variant docs, and `anyOf` for `Option<EnumType>` (nullable union). `$ref`/`$defs` appear for any non-inline type.
+
+**Rule: never use enum types in dedicated tool input structs.** Use `String` + runtime validation instead:
+```rust
+// BAD — schemars emits oneOf + anyOf + $ref
+pub detail_level: Option<DetailLevel>,
+
+// GOOD — flat string schema, parse in handler
+pub detail_level: Option<String>,
+```
+
+This only applies to the dedicated `*Input` structs (the ones directly wired to `#[tool]` methods). The free-form `QueryInput`/`MutationInput` wrappers are fine because their inner enums (`QueryRequest`, `MutationRequest`) are deserialized at runtime from the flattened params map — their schemas never reach Claude Code.
+
 ## CLI Command Structure
 
 Modern unified interface (no legacy commands):

@@ -1,8 +1,9 @@
-//! Candle-based inference backend for embedding and reranking models.
+//! Candle-based inference backend for embedding, reranking, and classification models.
 //!
 //! Pure-Rust ML runtime using candle with Metal GPU acceleration on macOS.
-//! Provides [`BertEmbedder`] for sentence embeddings (BGE-small/base/large)
-//! and [`CrossEncoderReranker`] for relevance scoring (BGE-reranker-base).
+//! Provides [`BertEmbedder`] for sentence embeddings (BGE-small/base/large),
+//! [`CrossEncoderReranker`] for relevance scoring (BGE-reranker-base),
+//! and [`SequenceClassifier`] for multi-label classification (GoEmotions).
 
 use std::path::{Path, PathBuf};
 
@@ -283,5 +284,149 @@ impl CrossEncoderReranker {
         let scores = scores.flatten_all()?.to_vec1::<f32>()?;
 
         Ok(scores)
+    }
+}
+
+/// Multi-label sequence classifier using XLM-RoBERTa.
+///
+/// Classifies text into multiple labels with independent sigmoid activations.
+/// Compatible with RoBERTa-based GoEmotions models (28 emotion labels).
+pub struct SequenceClassifier {
+    model: XLMRobertaForSequenceClassification,
+    tokenizer: Tokenizer,
+    device: Device,
+    num_labels: usize,
+    labels: Vec<String>,
+}
+
+impl SequenceClassifier {
+    /// Load a sequence classifier from downloaded model files.
+    ///
+    /// Parses `id2label` from config.json to determine label names and count.
+    pub fn new(files: &ModelFiles, device: Device) -> Result<Self> {
+        let config_str = std::fs::read_to_string(&files.config_path)
+            .context("Failed to read classifier config")?;
+        let config: XLMRobertaConfig =
+            serde_json::from_str(&config_str).context("Failed to parse XLM-RoBERTa config")?;
+
+        // Parse id2label from config.json for label names
+        let config_json: serde_json::Value =
+            serde_json::from_str(&config_str).context("Failed to parse config as JSON")?;
+        let id2label = config_json
+            .get("id2label")
+            .and_then(|v| v.as_object())
+            .context("config.json missing id2label mapping")?;
+
+        // Build ordered label list from id2label: {"0": "admiration", "1": "amusement", ...}
+        let mut label_entries: Vec<(usize, String)> = id2label
+            .iter()
+            .filter_map(|(k, v)| {
+                let idx: usize = k.parse().ok()?;
+                let label = v.as_str()?.to_string();
+                Some((idx, label))
+            })
+            .collect();
+        label_entries.sort_by_key(|(idx, _)| *idx);
+        let labels: Vec<String> = label_entries.into_iter().map(|(_, label)| label).collect();
+        let num_labels = labels.len();
+
+        if num_labels == 0 {
+            anyhow::bail!("id2label is empty — cannot determine label count");
+        }
+
+        let mut tokenizer = Tokenizer::from_file(&files.tokenizer_path)
+            .map_err(|e| anyhow::anyhow!("Failed to load classifier tokenizer: {}", e))?;
+
+        tokenizer.with_padding(Some(PaddingParams {
+            strategy: PaddingStrategy::BatchLongest,
+            ..Default::default()
+        }));
+
+        // SAFETY: mmap'd safetensors file — safe as long as the file is not modified
+        // while the model is in use.
+        let vb = unsafe {
+            VarBuilder::from_mmaped_safetensors(&[&files.weights_path], DType::F32, &device)
+                .context("Failed to load classifier weights")?
+        };
+        let model = XLMRobertaForSequenceClassification::new(num_labels, &config, vb)
+            .context("Failed to construct classifier model")?;
+
+        Ok(Self {
+            model,
+            tokenizer,
+            device,
+            num_labels,
+            labels,
+        })
+    }
+
+    /// Classify texts into multi-label scores.
+    ///
+    /// Returns one `Vec<(label, score)>` per input text, with all labels
+    /// and their sigmoid-activated scores (0..1).
+    pub fn classify(&self, texts: &[String]) -> Result<Vec<Vec<(String, f32)>>> {
+        if texts.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let str_refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
+        let encodings = self
+            .tokenizer
+            .encode_batch(str_refs, true)
+            .map_err(|e| anyhow::anyhow!("Classifier tokenization failed: {}", e))?;
+
+        let batch_size = encodings.len();
+        let max_len = encodings
+            .iter()
+            .map(|e| e.get_ids().len())
+            .max()
+            .unwrap_or(0);
+
+        let input_ids: Vec<u32> = encodings
+            .iter()
+            .flat_map(|e| e.get_ids().to_vec())
+            .collect();
+        let attention_mask: Vec<u32> = encodings
+            .iter()
+            .flat_map(|e| e.get_attention_mask().to_vec())
+            .collect();
+
+        let input_ids = Tensor::from_vec(input_ids, (batch_size, max_len), &self.device)?;
+        let attention_mask = Tensor::from_vec(attention_mask, (batch_size, max_len), &self.device)?;
+        // XLM-RoBERTa doesn't use token_type_ids — pass zeros
+        let token_type_ids = input_ids.zeros_like()?;
+
+        // Forward pass -> [batch, num_labels] logits
+        let logits = self
+            .model
+            .forward(&input_ids, &attention_mask, &token_type_ids)?;
+
+        // Sigmoid for independent multi-label activations
+        let scores = candle_nn::ops::sigmoid(&logits)?;
+        let scores_vec = scores.to_vec2::<f32>()?;
+
+        // Pair each score with its label name
+        let results: Vec<Vec<(String, f32)>> = scores_vec
+            .into_iter()
+            .map(|row| {
+                self.labels
+                    .iter()
+                    .zip(row)
+                    .map(|(label, score)| (label.clone(), score))
+                    .collect()
+            })
+            .collect();
+
+        Ok(results)
+    }
+
+    /// Get the label names in index order.
+    pub fn labels(&self) -> &[String] {
+        &self.labels
+    }
+
+    /// Get the number of classification labels.
+    pub fn num_labels(&self) -> usize {
+        self.num_labels
     }
 }

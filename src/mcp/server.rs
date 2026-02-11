@@ -22,6 +22,7 @@ use crate::mcp::resources::{
 use crate::repository::{
     SurrealEntityRepository, SurrealKnowledgeRepository, SurrealRelationshipRepository,
 };
+use crate::services::EmotionService;
 use crate::services::{
     CachedContextService, CachedSummaryService, ConsistencyChecker, ConsistencyService,
     ContextService, ImpactAnalyzer, ImpactService, SearchService, SummaryService,
@@ -34,7 +35,7 @@ use crate::mcp::error::ToolError;
 use crate::mcp::tools::export::{ExportRequest, ExportResponse};
 use crate::mcp::tools::graph::{GraphRequest, GraphResponse};
 use crate::mcp::{
-    CreateCharacterInput, CreateRelationshipInput, DossierInput, IronyReportInput,
+    CreateCharacterInput, CreateRelationshipInput, DetailLevel, DossierInput, IronyReportInput,
     KeywordSearchInput, KnowledgeAsymmetriesInput, LookupInput, MutationInput, MutationResponse,
     OverviewInput, QueryInput, QueryResponse, RecordKnowledgeInput, ScenePrepInput,
     SemanticSearchInput, SessionInput, SessionResponse, UpdateEntityInput, ValidateEntityInput,
@@ -58,6 +59,7 @@ pub struct NarraServer {
     pub(crate) session_manager: Arc<SessionStateManager>,
     pub(crate) embedding_service: Arc<dyn EmbeddingService + Send + Sync>,
     pub(crate) staleness_manager: Arc<StalenessManager>,
+    pub(crate) emotion_service: Arc<dyn EmotionService + Send + Sync>,
     tool_router: ToolRouter<Self>,
 }
 
@@ -96,6 +98,16 @@ impl NarraServer {
         let staleness_manager =
             Arc::new(StalenessManager::new(db.clone(), embedding_service.clone()));
 
+        // Emotion classifier — degrades gracefully if model unavailable
+        let emotion_service: Arc<dyn EmotionService + Send + Sync> = {
+            let service = crate::services::LocalEmotionService::new(db.clone());
+            if service.is_available() {
+                Arc::new(service)
+            } else {
+                Arc::new(crate::services::NoopEmotionService::new())
+            }
+        };
+
         Self {
             db,
             search_service,
@@ -109,6 +121,7 @@ impl NarraServer {
             session_manager,
             embedding_service,
             staleness_manager,
+            emotion_service,
             tool_router: Self::tool_router(),
         }
     }
@@ -315,7 +328,12 @@ impl NarraServer {
         request: Parameters<LookupInput>,
     ) -> Result<Json<QueryResponse>, ToolError> {
         let Parameters(input) = request;
-        self.handle_lookup(&input.entity_id, input.detail_level.unwrap_or_default())
+        let detail_level = match input.detail_level.as_deref() {
+            Some("full") => DetailLevel::Full,
+            Some("standard") => DetailLevel::Standard,
+            _ => DetailLevel::Summary,
+        };
+        self.handle_lookup(&input.entity_id, detail_level)
             .await
             .map(Json)
             .map_err(ToolError::from)
@@ -901,6 +919,7 @@ impl NarraServer {
             session_manager: ctx.session_manager.clone(),
             embedding_service: ctx.embedding_service.clone(),
             staleness_manager: ctx.staleness_manager.clone(),
+            emotion_service: ctx.emotion_service.clone(),
             tool_router: Self::tool_router(),
         }
     }

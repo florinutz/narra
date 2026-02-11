@@ -107,6 +107,15 @@ impl NarraServer {
         self.staleness_manager
             .spawn_regeneration(entity_id.clone(), "fact".to_string(), None);
 
+        // Mark annotations stale for the updated fact
+        if let Err(e) = self
+            .staleness_manager
+            .mark_annotations_stale(&entity_id)
+            .await
+        {
+            tracing::warn!("Failed to mark annotations stale for {}: {}", entity_id, e);
+        }
+
         let result = EntityResult {
             id: entity_id.clone(),
             entity_type: "universe_fact".to_string(),

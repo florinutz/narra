@@ -4,6 +4,7 @@ pub mod composite;
 
 pub mod consistency;
 pub mod context;
+pub mod emotion;
 pub mod export;
 pub mod graph;
 pub mod graph_analytics;
@@ -46,6 +47,7 @@ pub use summary::{
 };
 
 pub use arc::{ArcComparisonResult, ArcHistoryResult, ArcMomentResult, ArcService};
+pub use emotion::{EmotionService, LocalEmotionService, NoopEmotionService};
 pub use perception::{
     PerceptionGapResult, PerceptionMatrixResult, PerceptionService, PerceptionShiftResult,
 };

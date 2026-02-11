@@ -657,6 +657,96 @@ impl NarraServer {
         })
     }
 
+    pub(crate) async fn handle_emotions(&self, entity_id: &str) -> Result<QueryResponse, String> {
+        if !self.emotion_service.is_available() {
+            return Err(
+                "Emotion classifier is not available. The GoEmotions model may not be downloaded."
+                    .to_string(),
+            );
+        }
+
+        // Fetch composite text for the entity (used as input to the classifier)
+        #[derive(Deserialize)]
+        struct CompositeRow {
+            composite_text: Option<String>,
+            name: Option<String>,
+            title: Option<String>,
+            fact: Option<String>,
+        }
+
+        let mut resp = self
+            .db
+            .query(format!(
+                "SELECT composite_text, name, title, fact FROM {} LIMIT 1",
+                entity_id
+            ))
+            .await
+            .map_err(|e| format!("Entity lookup failed: {}", e))?;
+
+        let entity: Option<CompositeRow> = resp
+            .take(0)
+            .map_err(|e| format!("Failed to parse entity: {}", e))?;
+
+        let entity = entity.ok_or_else(|| format!("Entity not found: {}", entity_id))?;
+
+        let text = entity
+            .composite_text
+            .or(entity.name)
+            .or(entity.title)
+            .or(entity.fact)
+            .ok_or_else(|| {
+                format!(
+                    "No text content available for {}. Run backfill_embeddings first.",
+                    entity_id
+                )
+            })?;
+
+        let output = self
+            .emotion_service
+            .get_emotions(entity_id, &text)
+            .await
+            .map_err(|e| format!("Emotion classification failed: {}", e))?;
+
+        // Format output
+        let mut content_parts = vec![format!("# Emotion Analysis: {}", entity_id)];
+        content_parts.push(format!(
+            "**Dominant:** {} | **Active emotions:** {}",
+            output.dominant, output.active_count
+        ));
+
+        content_parts.push("\n| Emotion | Score |".to_string());
+        content_parts.push("|---------|-------|".to_string());
+
+        // Show top emotions (above threshold or top 10)
+        let display_count = output.active_count.max(5).min(output.scores.len());
+        for score in output.scores.iter().take(display_count) {
+            let bar = if score.score >= 0.3 { " ***" } else { "" };
+            content_parts.push(format!("| {} | {:.3}{} |", score.label, score.score, bar));
+        }
+
+        let content = content_parts.join("\n");
+        let token_estimate = content.len() / 4 + 50;
+
+        Ok(QueryResponse {
+            results: vec![EntityResult {
+                id: format!("report:emotions:{}", entity_id),
+                entity_type: "report".to_string(),
+                name: format!("Emotions: {}", entity_id),
+                content,
+                confidence: None,
+                last_modified: None,
+            }],
+            total: 1,
+            next_cursor: None,
+            hints: vec![
+                "Emotion scores are cached — they auto-refresh when the entity changes".to_string(),
+                "Use character_dossier for a full character analysis".to_string(),
+            ],
+            token_estimate,
+            truncated: None,
+        })
+    }
+
     pub(crate) async fn handle_character_voice(
         &self,
         character_id: &str,

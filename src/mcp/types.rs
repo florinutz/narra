@@ -587,6 +587,13 @@ pub enum QueryRequest {
         #[serde(default)]
         limit: Option<usize>,
     },
+    /// Classify the emotional tone of an entity's composite text.
+    /// Returns emotion labels with confidence scores (GoEmotions, 28 labels).
+    /// Uses cached annotations — results are recomputed only when the entity changes.
+    Emotions {
+        /// Entity ID (e.g., "character:alice", "event:betrayal")
+        entity_id: String,
+    },
     /// Identify entities that bridge multiple narrative phases.
     /// These "transition points" are characters, events, or locations
     /// that connect different arcs in the story.
@@ -1176,9 +1183,9 @@ pub struct KeywordSearchInput {
 pub struct LookupInput {
     /// Entity ID (e.g., "character:alice", "event:betrayal")
     pub entity_id: String,
-    /// Detail level: summary, standard, or full (default: summary)
+    /// Detail level: "summary" (default), "standard", or "full"
     #[serde(default)]
-    pub detail_level: Option<DetailLevel>,
+    pub detail_level: Option<String>,
 }
 
 /// Input for create_character tool.

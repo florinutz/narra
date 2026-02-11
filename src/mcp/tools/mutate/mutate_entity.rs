@@ -481,6 +481,15 @@ impl NarraServer {
             );
         }
 
+        // Mark annotations stale (emotion, etc.) so they are recomputed on next access
+        if let Err(e) = self
+            .staleness_manager
+            .mark_annotations_stale(entity_id)
+            .await
+        {
+            tracing::warn!("Failed to mark annotations stale for {}: {}", entity_id, e);
+        }
+
         // If character name or roles changed, mark their relates_to edges stale
         if entity_type == "character"
             && (fields.get("name").is_some() || fields.get("roles").is_some())
@@ -622,6 +631,13 @@ impl NarraServer {
                 entity_id,
                 e
             );
+        }
+
+        // Delete annotations for the deleted entity
+        if let Err(e) =
+            crate::models::annotation::delete_entity_annotations(&self.db, entity_id).await
+        {
+            tracing::warn!("Failed to delete annotations for {}: {}", entity_id, e);
         }
 
         let result = EntityResult {

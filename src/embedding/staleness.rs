@@ -192,6 +192,18 @@ impl StalenessManager {
         Ok(())
     }
 
+    /// Mark all annotations stale for an entity.
+    ///
+    /// Called alongside `mark_stale` when an entity is mutated, so that
+    /// cached ML annotations (emotion, etc.) are recomputed on next access.
+    pub async fn mark_annotations_stale(&self, entity_id: &str) -> Result<(), NarraError> {
+        let count = crate::models::annotation::mark_annotations_stale(&self.db, entity_id).await?;
+        if count > 0 {
+            info!("Marked {} annotations stale for {}", count, entity_id);
+        }
+        Ok(())
+    }
+
     /// Check if a regeneration should be debounced.
     ///
     /// Returns true if the spawn should proceed, false if it should be skipped.

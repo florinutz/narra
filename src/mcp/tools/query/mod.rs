@@ -100,7 +100,8 @@ fn tool_type_budget(request: &QueryRequest) -> usize {
         QueryRequest::Lookup { .. }
         | QueryRequest::GetFact { .. }
         | QueryRequest::ArcMoment { .. }
-        | QueryRequest::CharacterVoice { .. } => 1000,
+        | QueryRequest::CharacterVoice { .. }
+        | QueryRequest::Emotions { .. } => 1000,
 
         // Analysis/intelligence tools — medium-high
         QueryRequest::KnowledgeAsymmetries { .. }
@@ -665,6 +666,7 @@ impl NarraServer {
                 )
                 .await
             }
+            QueryRequest::Emotions { entity_id } => self.handle_emotions(&entity_id).await,
             QueryRequest::DetectTransitions {
                 entity_types,
                 num_phases,

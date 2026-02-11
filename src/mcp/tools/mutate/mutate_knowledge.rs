@@ -121,6 +121,19 @@ impl NarraServer {
             arc_event_id,
         );
 
+        // Mark annotations stale for the character (new knowledge may change analysis)
+        if let Err(e) = self
+            .staleness_manager
+            .mark_annotations_stale(&character_id)
+            .await
+        {
+            tracing::warn!(
+                "Failed to mark annotations stale for {}: {}",
+                character_id,
+                e
+            );
+        }
+
         let entity_id = knowledge_state.id.to_string();
 
         let result = EntityResult {

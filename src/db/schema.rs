@@ -55,6 +55,9 @@ const SCHEMA_017: &str = include_str!("migrations/017_character_facets.surql");
 /// Phases: persisted narrative phase detection results + membership edges
 const SCHEMA_018: &str = include_str!("migrations/018_phases.surql");
 
+/// Annotations: generic ML model outputs cached per entity
+const SCHEMA_019: &str = include_str!("migrations/019_annotations.surql");
+
 /// Apply the database schema to an initialized database connection.
 ///
 /// This executes all DEFINE statements in the schema files, creating tables,
@@ -77,6 +80,7 @@ const SCHEMA_018: &str = include_str!("migrations/018_phases.surql");
 /// - 016: Embedding metadata (world_meta table for model/dimensions/provider tracking)
 /// - 017: Character facets (multi-vector embeddings for faceted search)
 /// - 018: Phases (persisted narrative phase detection results + membership edges)
+/// - 019: Annotations (generic ML model outputs cached per entity)
 ///
 /// It's safe to call multiple times - SurrealDB will update existing definitions
 /// rather than fail.
@@ -120,5 +124,6 @@ pub async fn apply_schema(db: &NarraDb) -> Result<(), NarraError> {
     db.query(SCHEMA_016).await?;
     db.query(SCHEMA_017).await?;
     db.query(SCHEMA_018).await?;
+    db.query(SCHEMA_019).await?;
     Ok(())
 }

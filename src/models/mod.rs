@@ -1,3 +1,4 @@
+pub mod annotation;
 pub mod character;
 pub mod event;
 pub mod fact;
@@ -9,6 +10,7 @@ pub mod phase;
 pub mod relationship;
 pub mod scene;
 
+pub use annotation::{Annotation, AnnotationCreate, EmotionOutput, EmotionScore};
 pub use character::{Character, CharacterCreate, CharacterUpdate};
 pub use event::{Event, EventCreate, EventUpdate};
 pub use fact::{

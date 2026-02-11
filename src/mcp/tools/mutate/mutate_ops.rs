@@ -46,6 +46,18 @@ impl NarraServer {
         self.staleness_manager
             .spawn_regeneration(to_id.clone(), "character".to_string(), None);
 
+        // Mark annotations stale for both characters (relationship changes affect analysis)
+        if let Err(e) = self
+            .staleness_manager
+            .mark_annotations_stale(&from_id)
+            .await
+        {
+            tracing::warn!("Failed to mark annotations stale for {}: {}", from_id, e);
+        }
+        if let Err(e) = self.staleness_manager.mark_annotations_stale(&to_id).await {
+            tracing::warn!("Failed to mark annotations stale for {}: {}", to_id, e);
+        }
+
         // Mark perspective embeddings stale for perceives edges between these characters
         mark_perspective_stale_for_pair(
             &self.db,
