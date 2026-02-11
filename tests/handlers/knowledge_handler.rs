@@ -700,6 +700,262 @@ async fn test_temporal_by_event_name() {
 // ERROR CASES
 // =============================================================================
 
+// =============================================================================
+// BATCH RECORD KNOWLEDGE
+// =============================================================================
+
+/// Test batch recording knowledge for multiple characters.
+///
+/// Verifies:
+/// - Handler returns success with batch entity_type
+/// - All knowledge entries are created
+/// - Entities list contains individual results
+#[tokio::test]
+async fn test_batch_record_knowledge_success() {
+    let harness = TestHarness::new().await;
+    let server = crate::common::create_test_server(&harness).await;
+
+    // Create characters and a target
+    let repo = SurrealEntityRepository::new(harness.db.clone());
+    let alice = repo
+        .create_character(CharacterBuilder::new("Alice").build())
+        .await
+        .expect("Failed to create Alice");
+    let bob = repo
+        .create_character(CharacterBuilder::new("Bob").build())
+        .await
+        .expect("Failed to create Bob");
+    let location = repo
+        .create_location(LocationBuilder::new("The Tower").build())
+        .await
+        .expect("Failed to create location");
+
+    let request = MutationRequest::BatchRecordKnowledge {
+        knowledge: vec![
+            narra::mcp::KnowledgeSpec {
+                character_id: alice.id.to_string(),
+                target_id: location.id.to_string(),
+                fact: "The tower is haunted".to_string(),
+                certainty: "knows".to_string(),
+                method: Some("initial".to_string()),
+                source_character_id: None,
+                event_id: None,
+            },
+            narra::mcp::KnowledgeSpec {
+                character_id: bob.id.to_string(),
+                target_id: location.id.to_string(),
+                fact: "The tower holds treasure".to_string(),
+                certainty: "suspects".to_string(),
+                method: Some("initial".to_string()),
+                source_character_id: None,
+                event_id: None,
+            },
+        ],
+    };
+    let response = server
+        .handle_mutate(Parameters(to_mutation_input(request)))
+        .await;
+
+    assert!(
+        response.is_ok(),
+        "Batch record knowledge should succeed: {:?}",
+        response.err()
+    );
+    let response = response.unwrap();
+
+    assert_eq!(response.entity.entity_type, "batch");
+    let entities = response.entities.expect("Should have entities list");
+    assert_eq!(entities.len(), 2);
+    for e in &entities {
+        assert_eq!(e.entity_type, "knowledge");
+    }
+    assert!(response.hints.iter().any(|h| h.contains("2/2")));
+}
+
+/// Test batch knowledge with partial failure.
+///
+/// Verifies:
+/// - Valid entries succeed, invalid ones fail
+/// - Response includes error information in hints
+#[tokio::test]
+async fn test_batch_record_knowledge_partial_failure() {
+    let harness = TestHarness::new().await;
+    let server = crate::common::create_test_server(&harness).await;
+
+    let repo = SurrealEntityRepository::new(harness.db.clone());
+    let alice = repo
+        .create_character(CharacterBuilder::new("Alice").build())
+        .await
+        .expect("Failed to create Alice");
+    let location = repo
+        .create_location(LocationBuilder::new("The Tower").build())
+        .await
+        .expect("Failed to create location");
+
+    let request = MutationRequest::BatchRecordKnowledge {
+        knowledge: vec![
+            narra::mcp::KnowledgeSpec {
+                character_id: alice.id.to_string(),
+                target_id: location.id.to_string(),
+                fact: "Valid knowledge".to_string(),
+                certainty: "knows".to_string(),
+                method: Some("initial".to_string()),
+                source_character_id: None,
+                event_id: None,
+            },
+            narra::mcp::KnowledgeSpec {
+                character_id: "invalid_format".to_string(), // Bad ID
+                target_id: location.id.to_string(),
+                fact: "This should fail".to_string(),
+                certainty: "knows".to_string(),
+                method: None,
+                source_character_id: None,
+                event_id: None,
+            },
+        ],
+    };
+    let response = server
+        .handle_mutate(Parameters(to_mutation_input(request)))
+        .await;
+
+    assert!(
+        response.is_ok(),
+        "Partial batch should still succeed: {:?}",
+        response.err()
+    );
+    let response = response.unwrap();
+
+    let entities = response.entities.expect("Should have entities list");
+    assert_eq!(entities.len(), 1, "Only valid entry should succeed");
+    assert!(
+        response.hints.iter().any(|h| h.contains("1/2")),
+        "Hints should show partial success"
+    );
+    assert!(
+        response.hints.iter().any(|h| h.contains("Errors")),
+        "Hints should mention errors"
+    );
+}
+
+/// Test batch knowledge where all entries fail.
+///
+/// Verifies error is returned when entire batch fails.
+#[tokio::test]
+async fn test_batch_record_knowledge_all_fail() {
+    let harness = TestHarness::new().await;
+    let server = crate::common::create_test_server(&harness).await;
+
+    let request = MutationRequest::BatchRecordKnowledge {
+        knowledge: vec![
+            narra::mcp::KnowledgeSpec {
+                character_id: "bad_id_1".to_string(),
+                target_id: "character:someone".to_string(),
+                fact: "Fact 1".to_string(),
+                certainty: "knows".to_string(),
+                method: None,
+                source_character_id: None,
+                event_id: None,
+            },
+            narra::mcp::KnowledgeSpec {
+                character_id: "bad_id_2".to_string(),
+                target_id: "character:someone".to_string(),
+                fact: "Fact 2".to_string(),
+                certainty: "knows".to_string(),
+                method: None,
+                source_character_id: None,
+                event_id: None,
+            },
+        ],
+    };
+    let response = server
+        .handle_mutate(Parameters(to_mutation_input(request)))
+        .await;
+
+    assert!(response.is_err(), "All-fail batch should return error");
+    let err = response.unwrap_err();
+    assert!(
+        err.contains("All") && err.contains("failed"),
+        "Error should indicate all entries failed: {}",
+        err
+    );
+}
+
+/// Test batch knowledge with event links creates proper temporal associations.
+#[tokio::test]
+async fn test_batch_record_knowledge_with_events() {
+    let harness = TestHarness::new().await;
+    let server = crate::common::create_test_server(&harness).await;
+
+    let repo = SurrealEntityRepository::new(harness.db.clone());
+    let alice = repo
+        .create_character(CharacterBuilder::new("Alice").build())
+        .await
+        .expect("Failed to create Alice");
+    let bob = repo
+        .create_character(CharacterBuilder::new("Bob").build())
+        .await
+        .expect("Failed to create Bob");
+    let event = repo
+        .create_event(EventBuilder::new("The Meeting").sequence(1).build())
+        .await
+        .expect("Failed to create event");
+
+    let request = MutationRequest::BatchRecordKnowledge {
+        knowledge: vec![
+            narra::mcp::KnowledgeSpec {
+                character_id: alice.id.to_string(),
+                target_id: bob.id.to_string(),
+                fact: "Alice met Bob at the meeting".to_string(),
+                certainty: "knows".to_string(),
+                method: Some("witnessed".to_string()),
+                source_character_id: None,
+                event_id: Some(event.id.key().to_string()),
+            },
+            narra::mcp::KnowledgeSpec {
+                character_id: bob.id.to_string(),
+                target_id: alice.id.to_string(),
+                fact: "Bob met Alice at the meeting".to_string(),
+                certainty: "knows".to_string(),
+                method: Some("witnessed".to_string()),
+                source_character_id: None,
+                event_id: Some(event.id.key().to_string()),
+            },
+        ],
+    };
+    let response = server
+        .handle_mutate(Parameters(to_mutation_input(request)))
+        .await;
+
+    assert!(
+        response.is_ok(),
+        "Batch with events should succeed: {:?}",
+        response.err()
+    );
+    let response = response.unwrap();
+    let entities = response.entities.expect("Should have entities list");
+    assert_eq!(entities.len(), 2);
+
+    // Verify both characters have knowledge states with event references
+    let knowledge_repo = SurrealKnowledgeRepository::new(harness.db.clone());
+    let alice_states = knowledge_repo
+        .get_character_knowledge_states(alice.id.key().to_string().as_str())
+        .await
+        .expect("Get Alice knowledge");
+    assert!(!alice_states.is_empty());
+    assert!(alice_states[0].event.is_some(), "Should have event link");
+
+    let bob_states = knowledge_repo
+        .get_character_knowledge_states(bob.id.key().to_string().as_str())
+        .await
+        .expect("Get Bob knowledge");
+    assert!(!bob_states.is_empty());
+    assert!(bob_states[0].event.is_some(), "Should have event link");
+}
+
+// =============================================================================
+// ERROR CASES
+// =============================================================================
+
 /// Test recording knowledge with invalid character_id returns error.
 #[tokio::test]
 async fn test_record_knowledge_invalid_character() {

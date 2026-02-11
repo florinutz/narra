@@ -111,6 +111,7 @@ impl NarraServer {
                 vec![summary]
             },
             token_estimate: 500,
+            truncated: None,
         })
     }
 
@@ -180,6 +181,7 @@ impl NarraServer {
             next_cursor: None,
             hints: vec![summary],
             token_estimate: 500,
+            truncated: None,
         })
     }
 
@@ -261,6 +263,7 @@ impl NarraServer {
             next_cursor: None,
             hints,
             token_estimate: 500,
+            truncated: None,
         })
     }
 }

@@ -142,9 +142,14 @@ pub fn create_embedding_service(
         } => {
             let embedding_model = match model.as_str() {
                 "bge-small-en-v1.5" => fastembed::EmbeddingModel::BGESmallENV15,
+                "bge-base-en-v1.5" => fastembed::EmbeddingModel::BGEBaseENV15,
+                "bge-large-en-v1.5" => fastembed::EmbeddingModel::BGELargeENV15,
+                "bge-small-en-v1.5-q" => fastembed::EmbeddingModel::BGESmallENV15Q,
+                "bge-base-en-v1.5-q" => fastembed::EmbeddingModel::BGEBaseENV15Q,
+                "bge-large-en-v1.5-q" => fastembed::EmbeddingModel::BGELargeENV15Q,
                 other => {
                     return Err(NarraError::Database(format!(
-                        "Unknown local embedding model: '{}'. Supported: bge-small-en-v1.5",
+                        "Unknown local embedding model: '{}'. Supported: bge-small-en-v1.5, bge-base-en-v1.5, bge-large-en-v1.5, bge-small-en-v1.5-q, bge-base-en-v1.5-q, bge-large-en-v1.5-q",
                         other
                     )));
                 }

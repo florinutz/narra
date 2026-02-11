@@ -22,6 +22,7 @@ pub fn to_query_input(request: QueryRequest) -> QueryInput {
 
     QueryInput {
         operation,
+        token_budget: None,
         params: obj,
     }
 }

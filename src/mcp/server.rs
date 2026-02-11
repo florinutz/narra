@@ -30,6 +30,7 @@ use crate::services::{
 use crate::session::SessionStateManager;
 
 // Import tool request/response types
+use crate::mcp::error::ToolError;
 use crate::mcp::tools::export::{ExportRequest, ExportResponse};
 use crate::mcp::tools::graph::{GraphRequest, GraphResponse};
 use crate::mcp::{
@@ -37,7 +38,7 @@ use crate::mcp::{
     KeywordSearchInput, KnowledgeAsymmetriesInput, LookupInput, MutationInput, MutationResponse,
     OverviewInput, QueryInput, QueryResponse, RecordKnowledgeInput, ScenePrepInput,
     SemanticSearchInput, SessionInput, SessionResponse, UpdateEntityInput, ValidateEntityInput,
-    MAX_LIMIT,
+    DEFAULT_TOKEN_BUDGET, MAX_LIMIT,
 };
 
 /// MCP server for Narra world state.
@@ -124,8 +125,11 @@ impl NarraServer {
     pub async fn query(
         &self,
         request: Parameters<QueryInput>,
-    ) -> Result<Json<QueryResponse>, String> {
-        self.handle_query(request).await.map(Json)
+    ) -> Result<Json<QueryResponse>, ToolError> {
+        self.handle_query(request)
+            .await
+            .map(Json)
+            .map_err(ToolError::from)
     }
 
     #[tool(
@@ -135,8 +139,11 @@ impl NarraServer {
     pub async fn mutate(
         &self,
         request: Parameters<MutationInput>,
-    ) -> Result<Json<MutationResponse>, String> {
-        self.handle_mutate(request).await.map(Json)
+    ) -> Result<Json<MutationResponse>, ToolError> {
+        self.handle_mutate(request)
+            .await
+            .map(Json)
+            .map_err(ToolError::from)
     }
 
     #[tool(
@@ -146,8 +153,11 @@ impl NarraServer {
     pub async fn session(
         &self,
         request: Parameters<SessionInput>,
-    ) -> Result<Json<SessionResponse>, String> {
-        self.handle_session(request).await.map(Json)
+    ) -> Result<Json<SessionResponse>, ToolError> {
+        self.handle_session(request)
+            .await
+            .map(Json)
+            .map_err(ToolError::from)
     }
 
     #[tool(
@@ -157,8 +167,11 @@ impl NarraServer {
     pub async fn export_world(
         &self,
         request: Parameters<ExportRequest>,
-    ) -> Result<Json<ExportResponse>, String> {
-        self.handle_export_world(request).await.map(Json)
+    ) -> Result<Json<ExportResponse>, ToolError> {
+        self.handle_export_world(request)
+            .await
+            .map(Json)
+            .map_err(ToolError::from)
     }
 
     #[tool(
@@ -168,8 +181,11 @@ impl NarraServer {
     pub async fn generate_graph(
         &self,
         request: Parameters<GraphRequest>,
-    ) -> Result<Json<GraphResponse>, String> {
-        self.handle_generate_graph(request).await.map(Json)
+    ) -> Result<Json<GraphResponse>, ToolError> {
+        self.handle_generate_graph(request)
+            .await
+            .map(Json)
+            .map_err(ToolError::from)
     }
 
     // ==========================================================================
@@ -183,16 +199,19 @@ impl NarraServer {
     pub async fn semantic_search(
         &self,
         request: Parameters<SemanticSearchInput>,
-    ) -> Result<Json<QueryResponse>, String> {
+    ) -> Result<Json<QueryResponse>, ToolError> {
         let Parameters(input) = request;
-        self.handle_semantic_search(
+        self.handle_unified_search(
             &input.query,
+            "semantic",
             input.entity_types,
             input.limit.unwrap_or(10).min(MAX_LIMIT),
+            None,
             None,
         )
         .await
         .map(Json)
+        .map_err(ToolError::from)
     }
 
     #[tool(
@@ -202,11 +221,12 @@ impl NarraServer {
     pub async fn dossier(
         &self,
         request: Parameters<DossierInput>,
-    ) -> Result<Json<QueryResponse>, String> {
+    ) -> Result<Json<QueryResponse>, ToolError> {
         let Parameters(input) = request;
-        self.handle_character_dossier(&input.character_id)
+        self.handle_character_dossier(&input.character_id, None, DEFAULT_TOKEN_BUDGET)
             .await
             .map(Json)
+            .map_err(ToolError::from)
     }
 
     #[tool(
@@ -216,11 +236,12 @@ impl NarraServer {
     pub async fn scene_prep(
         &self,
         request: Parameters<ScenePrepInput>,
-    ) -> Result<Json<QueryResponse>, String> {
+    ) -> Result<Json<QueryResponse>, ToolError> {
         let Parameters(input) = request;
-        self.handle_scene_planning(&input.character_ids)
+        self.handle_scene_planning(&input.character_ids, None, DEFAULT_TOKEN_BUDGET)
             .await
             .map(Json)
+            .map_err(ToolError::from)
     }
 
     #[tool(
@@ -230,11 +251,12 @@ impl NarraServer {
     pub async fn overview(
         &self,
         request: Parameters<OverviewInput>,
-    ) -> Result<Json<QueryResponse>, String> {
+    ) -> Result<Json<QueryResponse>, ToolError> {
         let Parameters(input) = request;
         self.handle_overview(&input.entity_type, input.limit.unwrap_or(20).min(MAX_LIMIT))
             .await
             .map(Json)
+            .map_err(ToolError::from)
     }
 
     #[tool(
@@ -244,7 +266,7 @@ impl NarraServer {
     pub async fn record_knowledge(
         &self,
         request: Parameters<RecordKnowledgeInput>,
-    ) -> Result<Json<MutationResponse>, String> {
+    ) -> Result<Json<MutationResponse>, ToolError> {
         let Parameters(input) = request;
         self.handle_record_knowledge(
             input.character_id,
@@ -257,6 +279,7 @@ impl NarraServer {
         )
         .await
         .map(Json)
+        .map_err(ToolError::from)
     }
 
     // ==========================================================================
@@ -270,7 +293,7 @@ impl NarraServer {
     pub async fn search(
         &self,
         request: Parameters<KeywordSearchInput>,
-    ) -> Result<Json<QueryResponse>, String> {
+    ) -> Result<Json<QueryResponse>, ToolError> {
         let Parameters(input) = request;
         self.handle_search(
             &input.query,
@@ -280,6 +303,7 @@ impl NarraServer {
         )
         .await
         .map(Json)
+        .map_err(ToolError::from)
     }
 
     #[tool(
@@ -289,11 +313,12 @@ impl NarraServer {
     pub async fn lookup(
         &self,
         request: Parameters<LookupInput>,
-    ) -> Result<Json<QueryResponse>, String> {
+    ) -> Result<Json<QueryResponse>, ToolError> {
         let Parameters(input) = request;
         self.handle_lookup(&input.entity_id, input.detail_level.unwrap_or_default())
             .await
             .map(Json)
+            .map_err(ToolError::from)
     }
 
     #[tool(
@@ -303,7 +328,7 @@ impl NarraServer {
     pub async fn create_character(
         &self,
         request: Parameters<CreateCharacterInput>,
-    ) -> Result<Json<MutationResponse>, String> {
+    ) -> Result<Json<MutationResponse>, ToolError> {
         let Parameters(input) = request;
         self.handle_create_character(
             input.id,
@@ -315,6 +340,7 @@ impl NarraServer {
         )
         .await
         .map(Json)
+        .map_err(ToolError::from)
     }
 
     #[tool(
@@ -324,7 +350,7 @@ impl NarraServer {
     pub async fn create_relationship(
         &self,
         request: Parameters<CreateRelationshipInput>,
-    ) -> Result<Json<MutationResponse>, String> {
+    ) -> Result<Json<MutationResponse>, ToolError> {
         let Parameters(input) = request;
         self.handle_create_relationship(
             input.from_character_id,
@@ -335,6 +361,7 @@ impl NarraServer {
         )
         .await
         .map(Json)
+        .map_err(ToolError::from)
     }
 
     #[tool(
@@ -344,7 +371,7 @@ impl NarraServer {
     pub async fn irony_report(
         &self,
         request: Parameters<IronyReportInput>,
-    ) -> Result<Json<QueryResponse>, String> {
+    ) -> Result<Json<QueryResponse>, ToolError> {
         let Parameters(input) = request;
         self.handle_dramatic_irony_report(
             input.character_id,
@@ -352,6 +379,7 @@ impl NarraServer {
         )
         .await
         .map(Json)
+        .map_err(ToolError::from)
     }
 
     #[tool(
@@ -361,11 +389,12 @@ impl NarraServer {
     pub async fn update_entity(
         &self,
         request: Parameters<UpdateEntityInput>,
-    ) -> Result<Json<MutationResponse>, String> {
+    ) -> Result<Json<MutationResponse>, ToolError> {
         let Parameters(input) = request;
         self.handle_update(&input.entity_id, input.fields)
             .await
             .map(Json)
+            .map_err(ToolError::from)
     }
 
     #[tool(
@@ -375,11 +404,12 @@ impl NarraServer {
     pub async fn knowledge_asymmetries(
         &self,
         request: Parameters<KnowledgeAsymmetriesInput>,
-    ) -> Result<Json<QueryResponse>, String> {
+    ) -> Result<Json<QueryResponse>, ToolError> {
         let Parameters(input) = request;
         self.handle_knowledge_asymmetries(&input.character_a, &input.character_b)
             .await
             .map(Json)
+            .map_err(ToolError::from)
     }
 
     #[tool(
@@ -389,11 +419,12 @@ impl NarraServer {
     pub async fn validate_entity(
         &self,
         request: Parameters<ValidateEntityInput>,
-    ) -> Result<Json<QueryResponse>, String> {
+    ) -> Result<Json<QueryResponse>, ToolError> {
         let Parameters(input) = request;
         self.handle_validate_entity_query(&input.entity_id)
             .await
             .map(Json)
+            .map_err(ToolError::from)
     }
 }
 
@@ -1028,7 +1059,7 @@ impl NarraServer {
         character_id: &str,
     ) -> Result<ReadResourceResult, McpError> {
         let response = self
-            .handle_character_dossier(character_id)
+            .handle_character_dossier(character_id, None, DEFAULT_TOKEN_BUDGET)
             .await
             .map_err(|e| {
                 if e.contains("not found") {

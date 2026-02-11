@@ -252,6 +252,111 @@ async fn test_list_facts_unfiltered() {
     assert_eq!(response.results.len(), 2, "Should return all 2 facts");
 }
 
+/// Test ListFacts abbreviates descriptions when more than 5 results.
+#[tokio::test]
+async fn test_list_facts_abbreviation() {
+    let harness = TestHarness::new().await;
+
+    // Create 7 facts with long descriptions to trigger abbreviation (threshold is >5)
+    for i in 0..7 {
+        fact::create_fact(
+            &harness.db,
+            FactCreate {
+                title: format!("Fact {}", i),
+                description: format!(
+                    "This is a very detailed description for fact number {}. It has multiple sentences to test abbreviation behavior. The third sentence adds more length.",
+                    i
+                ),
+                categories: vec![],
+                enforcement_level: EnforcementLevel::Warning,
+                scope: None,
+            },
+        )
+        .await
+        .expect("Create fact");
+    }
+
+    let server = crate::common::create_test_server(&harness).await;
+
+    let request = QueryRequest::ListFacts {
+        category: None,
+        enforcement_level: None,
+        search: None,
+        entity_id: None,
+        limit: None,
+        cursor: None,
+    };
+
+    let response = server
+        .handle_query(Parameters(to_query_input(request)))
+        .await
+        .expect("ListFacts should succeed");
+
+    assert_eq!(response.results.len(), 7, "Should return all 7 facts");
+
+    // With >5 results, descriptions should be abbreviated to first sentence
+    for result in &response.results {
+        // Abbreviated content should NOT contain "multiple sentences" (second sentence)
+        assert!(
+            !result.content.contains("multiple sentences"),
+            "Content should be abbreviated (truncated to first sentence), got: {}",
+            result.content
+        );
+    }
+}
+
+/// Test ListFacts does NOT abbreviate when 5 or fewer results.
+#[tokio::test]
+async fn test_list_facts_no_abbreviation_small_set() {
+    let harness = TestHarness::new().await;
+
+    // Create exactly 3 facts
+    for i in 0..3 {
+        fact::create_fact(
+            &harness.db,
+            FactCreate {
+                title: format!("Fact {}", i),
+                description: format!(
+                    "Full description for fact {}. Second sentence with more details.",
+                    i
+                ),
+                categories: vec![],
+                enforcement_level: EnforcementLevel::Warning,
+                scope: None,
+            },
+        )
+        .await
+        .expect("Create fact");
+    }
+
+    let server = crate::common::create_test_server(&harness).await;
+
+    let request = QueryRequest::ListFacts {
+        category: None,
+        enforcement_level: None,
+        search: None,
+        entity_id: None,
+        limit: None,
+        cursor: None,
+    };
+
+    let response = server
+        .handle_query(Parameters(to_query_input(request)))
+        .await
+        .expect("ListFacts should succeed");
+
+    assert_eq!(response.results.len(), 3);
+
+    // With <=5 results, descriptions should NOT be abbreviated
+    for result in &response.results {
+        assert!(
+            result.content.contains("Second sentence"),
+            "Content should NOT be abbreviated for small sets, got: {}",
+            result.content
+        );
+    }
+}
+
 // =============================================================================
 // BASELINE ARC SNAPSHOTS TESTS
 // =============================================================================

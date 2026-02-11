@@ -5,6 +5,7 @@ mod mutate_import;
 mod mutate_knowledge;
 mod mutate_notes;
 mod mutate_ops;
+mod mutate_phases;
 
 use crate::mcp::{ImpactSummary, MutationInput, MutationRequest, MutationResponse, NarraServer};
 use crate::services::{ConsistencySeverity, ImpactAnalysis, ValidationResult};
@@ -158,6 +159,9 @@ impl NarraServer {
             MutationRequest::BatchCreateRelationships { relationships } => {
                 self.handle_batch_create_relationships(relationships).await
             }
+            MutationRequest::BatchRecordKnowledge { knowledge } => {
+                self.handle_batch_record_knowledge(knowledge).await
+            }
             MutationRequest::BackfillEmbeddings { entity_type } => {
                 self.handle_backfill_embeddings(entity_type).await
             }
@@ -174,6 +178,23 @@ impl NarraServer {
                 import,
                 on_conflict,
             } => self.handle_import_yaml(import, on_conflict).await,
+            MutationRequest::SavePhases {
+                entity_types,
+                num_phases,
+                content_weight,
+                neighborhood_weight,
+                temporal_weight,
+            } => {
+                self.handle_save_phases(
+                    entity_types,
+                    num_phases,
+                    content_weight,
+                    neighborhood_weight,
+                    temporal_weight,
+                )
+                .await
+            }
+            MutationRequest::ClearPhases => self.handle_clear_phases().await,
         }
     }
 

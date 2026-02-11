@@ -43,6 +43,7 @@ impl NarraServer {
             next_cursor: None,
             hints,
             token_estimate: connected.len() * 20, // Minimal estimate for IDs only
+            truncated: None,
         })
     }
 
@@ -87,6 +88,7 @@ impl NarraServer {
                     "Try increasing max_hops or check if both characters exist".to_string(),
                 ],
                 token_estimate: 100,
+                truncated: None,
             });
         }
 
@@ -138,6 +140,7 @@ impl NarraServer {
             next_cursor: None,
             hints,
             token_estimate,
+            truncated: None,
         })
     }
 
@@ -207,6 +210,7 @@ impl NarraServer {
             next_cursor: None,
             hints,
             token_estimate,
+            truncated: None,
         })
     }
 
@@ -304,6 +308,7 @@ impl NarraServer {
             next_cursor: None,
             hints,
             token_estimate,
+            truncated: None,
         })
     }
 }

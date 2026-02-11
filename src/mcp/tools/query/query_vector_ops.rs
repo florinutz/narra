@@ -18,66 +18,6 @@ fn normalize_id(id: &str, default_table: Option<&str>) -> String {
 }
 
 impl NarraServer {
-    pub(crate) async fn handle_reranked_search(
-        &self,
-        query: &str,
-        entity_types: Option<Vec<String>>,
-        limit: Option<usize>,
-    ) -> Result<QueryResponse, String> {
-        use crate::services::{EntityType, SearchFilter};
-
-        let entity_type_list: Vec<EntityType> = entity_types
-            .unwrap_or_default()
-            .iter()
-            .filter_map(|t| match t.as_str() {
-                "character" => Some(EntityType::Character),
-                "location" => Some(EntityType::Location),
-                "event" => Some(EntityType::Event),
-                "scene" => Some(EntityType::Scene),
-                "knowledge" => Some(EntityType::Knowledge),
-                _ => None,
-            })
-            .collect();
-
-        let limit = limit.unwrap_or(10).min(crate::mcp::types::MAX_LIMIT);
-        let filter = SearchFilter {
-            entity_types: entity_type_list,
-            limit: Some(limit),
-            ..Default::default()
-        };
-
-        let results = self
-            .search_service
-            .reranked_search(query, filter)
-            .await
-            .map_err(|e| format!("Re-ranked search failed: {}", e))?;
-
-        let entity_results: Vec<EntityResult> = results
-            .iter()
-            .map(|r| EntityResult {
-                id: r.id.clone(),
-                entity_type: r.entity_type.clone(),
-                name: r.name.clone(),
-                content: format!("[{}] {} (score: {:.4})", r.entity_type, r.name, r.score),
-                confidence: Some(r.score),
-                last_modified: None,
-            })
-            .collect();
-
-        let total = entity_results.len();
-        let token_estimate = self.estimate_tokens_from_results(&entity_results);
-
-        Ok(QueryResponse {
-            results: entity_results,
-            total,
-            next_cursor: None,
-            hints: vec![
-                "Re-ranked results use cross-encoder scoring for better relevance".to_string(),
-            ],
-            token_estimate,
-        })
-    }
-
     pub(crate) async fn handle_growth_vector(
         &self,
         entity_id: &str,
@@ -112,6 +52,7 @@ impl NarraServer {
                 result.snapshot_count, result.total_drift
             )],
             token_estimate: 200,
+            truncated: None,
         })
     }
 
@@ -154,6 +95,7 @@ impl NarraServer {
                 result.perception_gap
             )],
             token_estimate: 200,
+            truncated: None,
         })
     }
 
@@ -203,6 +145,7 @@ impl NarraServer {
                 trend_label, result.convergence_rate, result.current_similarity
             )],
             token_estimate: 200 + result.trend.len() * 20,
+            truncated: None,
         })
     }
 
@@ -242,6 +185,7 @@ impl NarraServer {
                 result.neighbors.len()
             )],
             token_estimate: 100 + result.neighbors.len() * 30,
+            truncated: None,
         })
     }
 
@@ -292,6 +236,7 @@ impl NarraServer {
                 facet, query
             )],
             token_estimate,
+            truncated: None,
         })
     }
 
@@ -348,6 +293,7 @@ impl NarraServer {
                 weights_str, query
             )],
             token_estimate,
+            truncated: None,
         })
     }
 
@@ -504,6 +450,7 @@ impl NarraServer {
                     .to_string(),
             ],
             token_estimate: 300,
+            truncated: None,
         })
     }
 }

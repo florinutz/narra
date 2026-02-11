@@ -591,6 +591,7 @@ pub async fn handle_graph(
     scope: &str,
     depth: usize,
     output: Option<&Path>,
+    phases: bool,
     mode: OutputMode,
 ) -> Result<()> {
     use crate::services::{GraphOptions, GraphScope, GraphService, MermaidGraphService};
@@ -608,7 +609,36 @@ pub async fn handle_graph(
     };
 
     let options = GraphOptions::default();
-    let mermaid = graph_service.generate_mermaid(graph_scope, options).await?;
+    let mut mermaid = graph_service.generate_mermaid(graph_scope, options).await?;
+
+    // Append phase coloring if requested
+    if phases {
+        use crate::services::{EntityType, TemporalService};
+
+        let temporal_service = TemporalService::new(ctx.db.clone());
+        match temporal_service
+            .load_or_detect_phases(EntityType::embeddable(), None, None)
+            .await
+        {
+            Ok(result) => {
+                let phase_section = generate_phase_styles(&result);
+                // Insert phase styles before the closing ``` fence
+                if let Some(fence_pos) = mermaid.rfind("\n```\n") {
+                    mermaid.insert_str(fence_pos, &phase_section);
+                } else {
+                    mermaid.push_str(&phase_section);
+                }
+            }
+            Err(e) => {
+                if mode != OutputMode::Json {
+                    eprintln!(
+                        "Warning: phase detection failed ({}), generating graph without colors",
+                        e
+                    );
+                }
+            }
+        }
+    }
 
     if let Some(path) = output {
         std::fs::write(path, &mermaid)?;
@@ -629,6 +659,62 @@ pub async fn handle_graph(
     }
 
     Ok(())
+}
+
+/// Generate Mermaid style definitions for phase coloring.
+pub fn generate_phase_styles(result: &crate::services::PhaseDetectionResult) -> String {
+    // Phase color palette (up to 8 phases, then cycles)
+    const PHASE_COLORS: &[(&str, &str)] = &[
+        ("#3b82f6", "#dbeafe"), // blue
+        ("#ef4444", "#fee2e2"), // red
+        ("#22c55e", "#dcfce7"), // green
+        ("#f59e0b", "#fef3c7"), // amber
+        ("#8b5cf6", "#ede9fe"), // purple
+        ("#14b8a6", "#ccfbf1"), // teal
+        ("#f97316", "#ffedd5"), // orange
+        ("#ec4899", "#fce7f3"), // pink
+    ];
+
+    let mut lines = Vec::new();
+    lines.push(String::new());
+    lines.push("    %% Phase coloring".to_string());
+
+    for phase in &result.phases {
+        let (stroke, fill) = PHASE_COLORS[phase.phase_id % PHASE_COLORS.len()];
+        let class_name = format!("phase{}", phase.phase_id);
+        lines.push(format!(
+            "    classDef {} fill:{},stroke:{},stroke-width:2px",
+            class_name, fill, stroke
+        ));
+    }
+
+    // Assign entities to phase classes (only character nodes in the graph)
+    for phase in &result.phases {
+        let char_ids: Vec<String> = phase
+            .members
+            .iter()
+            .filter(|m| m.entity_type == "character")
+            .filter_map(|m| m.entity_id.split(':').nth(1).map(|s| s.to_string()))
+            .collect();
+
+        if !char_ids.is_empty() {
+            let class_name = format!("phase{}", phase.phase_id);
+            lines.push(format!("    class {} {}", char_ids.join(","), class_name));
+        }
+    }
+
+    // Add phase legend as comment
+    lines.push(String::new());
+    lines.push("    %% Phase legend:".to_string());
+    for phase in &result.phases {
+        let (stroke, _) = PHASE_COLORS[phase.phase_id % PHASE_COLORS.len()];
+        lines.push(format!(
+            "    %% Phase {}: {} ({})",
+            phase.phase_id, phase.label, stroke
+        ));
+    }
+
+    lines.join("\n")
 }
 
 // =============================================================================
@@ -737,6 +823,363 @@ pub async fn handle_baseline_arcs(
         } else {
             println!("  No entities with embeddings found. Run 'narra world backfill' first.");
         }
+    }
+
+    Ok(())
+}
+
+// =============================================================================
+// Benchmark — compare embedding model quality
+// =============================================================================
+
+/// Spearman rank correlation coefficient between two rank orderings.
+fn spearman_correlation(ranks_a: &[usize], ranks_b: &[usize]) -> f64 {
+    let n = ranks_a.len();
+    if n < 2 {
+        return 1.0;
+    }
+    let d_squared_sum: f64 = ranks_a
+        .iter()
+        .zip(ranks_b.iter())
+        .map(|(a, b)| {
+            let d = *a as f64 - *b as f64;
+            d * d
+        })
+        .sum();
+    let n_f = n as f64;
+    1.0 - (6.0 * d_squared_sum) / (n_f * (n_f * n_f - 1.0))
+}
+
+pub async fn handle_benchmark(
+    ctx: &AppContext,
+    comparison_model: &str,
+    queries: &[String],
+    sample: usize,
+    limit: usize,
+    mode: OutputMode,
+) -> Result<()> {
+    use crate::embedding::provider::{create_embedding_service, EmbeddingProviderConfig};
+    use crate::utils::math::cosine_similarity;
+
+    let current_model = ctx.embedding_service.model_id().to_string();
+    let current_dims = ctx.embedding_service.dimensions();
+
+    if comparison_model == current_model {
+        anyhow::bail!(
+            "Comparison model '{}' is the same as current model. Choose a different model.",
+            comparison_model
+        );
+    }
+
+    if mode != OutputMode::Json {
+        println!(
+            "Benchmark: {} ({} dims) vs {} (comparison)\n",
+            current_model, current_dims, comparison_model
+        );
+    }
+
+    // Load comparison model
+    let spinner = create_spinner(&format!(
+        "Loading comparison model '{}'...",
+        comparison_model
+    ));
+    let comp_config = EmbeddingProviderConfig::Local {
+        model: comparison_model.to_string(),
+        cache_dir: None,
+        show_download_progress: true,
+    };
+    let comp_service = create_embedding_service(&comp_config)
+        .map_err(|e| anyhow::anyhow!("Failed to load comparison model: {}", e))?;
+    let comp_dims = comp_service.dimensions();
+    spinner.finish_and_clear();
+
+    if mode != OutputMode::Json {
+        println!(
+            "  Loaded '{}' ({} dims)\n",
+            comp_service.model_id(),
+            comp_dims
+        );
+    }
+
+    // Fetch sample entities with composite_text
+    let tables = [
+        "character",
+        "location",
+        "event",
+        "scene",
+        "knowledge",
+        "note",
+    ];
+    let per_table = (sample / tables.len()).max(1);
+
+    #[derive(Deserialize, Clone)]
+    struct TextEntity {
+        id: surrealdb::RecordId,
+        composite_text: String,
+        embedding: Option<Vec<f32>>,
+    }
+
+    let mut entities: Vec<TextEntity> = Vec::new();
+
+    for table in &tables {
+        let query = format!(
+            "SELECT id, composite_text, embedding FROM {} WHERE composite_text IS NOT NONE LIMIT {}",
+            table, per_table
+        );
+        let mut resp = ctx.db.query(&query).await?;
+        let rows: Vec<TextEntity> = resp.take(0).unwrap_or_default();
+        entities.extend(rows);
+    }
+
+    if entities.is_empty() {
+        anyhow::bail!("No entities with composite_text found. Run 'narra world backfill' first.");
+    }
+
+    let entity_count = entities.len();
+
+    if mode != OutputMode::Json {
+        println!("  Sampled {} entities for comparison\n", entity_count);
+    }
+
+    // Batch-embed with comparison model
+    let spinner = create_spinner("Embedding sample with comparison model...");
+    let texts: Vec<String> = entities.iter().map(|e| e.composite_text.clone()).collect();
+    let comp_start = std::time::Instant::now();
+    let comp_embeddings = comp_service.embed_batch(&texts).await?;
+    let comp_elapsed = comp_start.elapsed();
+    spinner.finish_and_clear();
+
+    // Also time current model on same texts for latency comparison
+    let spinner = create_spinner("Embedding sample with current model...");
+    let curr_start = std::time::Instant::now();
+    let curr_embeddings = ctx.embedding_service.embed_batch(&texts).await?;
+    let curr_elapsed = curr_start.elapsed();
+    spinner.finish_and_clear();
+
+    // Generate test queries
+    let test_queries: Vec<String> = if queries.is_empty() {
+        // Derive from entity IDs — extract the key portion as a natural query
+        entities
+            .iter()
+            .take(10)
+            .map(|e| {
+                let key = e.id.key().to_string();
+                key.replace(['⟨', '⟩'], "").replace(['_', '-'], " ")
+            })
+            .collect()
+    } else {
+        queries.to_vec()
+    };
+
+    if mode != OutputMode::Json {
+        println!("  Running {} test queries...\n", test_queries.len());
+    }
+
+    // Per-query comparison
+    #[derive(Serialize)]
+    struct QueryResult {
+        query: String,
+        current_top_ids: Vec<String>,
+        comparison_top_ids: Vec<String>,
+        current_avg_score: f64,
+        comparison_avg_score: f64,
+        score_delta: f64,
+        rank_correlation: f64,
+    }
+
+    let mut results: Vec<QueryResult> = Vec::new();
+
+    for q in &test_queries {
+        // Embed query with both models
+        let curr_q_emb = ctx.embedding_service.embed_text(q).await?;
+        let comp_q_emb = comp_service.embed_text(q).await?;
+
+        // Score all entities with current model
+        let mut curr_scores: Vec<(usize, f32)> = entities
+            .iter()
+            .enumerate()
+            .map(|(i, e)| {
+                let emb = e.embedding.as_ref().unwrap_or(&curr_embeddings[i]);
+                if emb.len() == curr_q_emb.len() {
+                    (i, cosine_similarity(&curr_q_emb, emb))
+                } else {
+                    (i, cosine_similarity(&curr_q_emb, &curr_embeddings[i]))
+                }
+            })
+            .collect();
+        curr_scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        // Score all entities with comparison model
+        let mut comp_scores: Vec<(usize, f32)> = comp_embeddings
+            .iter()
+            .enumerate()
+            .map(|(i, emb)| (i, cosine_similarity(&comp_q_emb, emb)))
+            .collect();
+        comp_scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        let top_k = limit.min(entity_count);
+
+        let curr_top: Vec<(usize, f32)> = curr_scores.iter().take(top_k).copied().collect();
+        let comp_top: Vec<(usize, f32)> = comp_scores.iter().take(top_k).copied().collect();
+
+        let curr_avg: f64 = curr_top.iter().map(|(_, s)| *s as f64).sum::<f64>() / top_k as f64;
+        let comp_avg: f64 = comp_top.iter().map(|(_, s)| *s as f64).sum::<f64>() / top_k as f64;
+
+        // Compute rank correlation on the union of top-k entity indices
+        let curr_rank_map: std::collections::HashMap<usize, usize> = curr_scores
+            .iter()
+            .enumerate()
+            .map(|(rank, (idx, _))| (*idx, rank))
+            .collect();
+        let comp_rank_map: std::collections::HashMap<usize, usize> = comp_scores
+            .iter()
+            .enumerate()
+            .map(|(rank, (idx, _))| (*idx, rank))
+            .collect();
+
+        let mut union_indices: Vec<usize> = curr_top.iter().map(|(i, _)| *i).collect();
+        for (i, _) in &comp_top {
+            if !union_indices.contains(i) {
+                union_indices.push(*i);
+            }
+        }
+
+        let curr_ranks: Vec<usize> = union_indices
+            .iter()
+            .map(|i| *curr_rank_map.get(i).unwrap_or(&entity_count))
+            .collect();
+        let comp_ranks: Vec<usize> = union_indices
+            .iter()
+            .map(|i| *comp_rank_map.get(i).unwrap_or(&entity_count))
+            .collect();
+
+        let rank_corr = spearman_correlation(&curr_ranks, &comp_ranks);
+
+        results.push(QueryResult {
+            query: q.clone(),
+            current_top_ids: curr_top
+                .iter()
+                .map(|(i, _)| entities[*i].id.to_string())
+                .collect(),
+            comparison_top_ids: comp_top
+                .iter()
+                .map(|(i, _)| entities[*i].id.to_string())
+                .collect(),
+            current_avg_score: curr_avg,
+            comparison_avg_score: comp_avg,
+            score_delta: comp_avg - curr_avg,
+            rank_correlation: rank_corr,
+        });
+    }
+
+    // Summary stats
+    let avg_rank_corr: f64 =
+        results.iter().map(|r| r.rank_correlation).sum::<f64>() / results.len() as f64;
+    let avg_curr_score: f64 =
+        results.iter().map(|r| r.current_avg_score).sum::<f64>() / results.len() as f64;
+    let avg_comp_score: f64 =
+        results.iter().map(|r| r.comparison_avg_score).sum::<f64>() / results.len() as f64;
+    let avg_score_delta: f64 = avg_comp_score - avg_curr_score;
+
+    let curr_latency_ms = curr_elapsed.as_millis() as f64 / entity_count as f64;
+    let comp_latency_ms = comp_elapsed.as_millis() as f64 / entity_count as f64;
+
+    if mode == OutputMode::Json {
+        output_json(&serde_json::json!({
+            "current_model": current_model,
+            "current_dimensions": current_dims,
+            "comparison_model": comparison_model,
+            "comparison_dimensions": comp_dims,
+            "entities_sampled": entity_count,
+            "queries": results,
+            "summary": {
+                "avg_current_score": avg_curr_score,
+                "avg_comparison_score": avg_comp_score,
+                "avg_score_delta": avg_score_delta,
+                "avg_rank_correlation": avg_rank_corr,
+                "current_latency_ms_per_entity": curr_latency_ms,
+                "comparison_latency_ms_per_entity": comp_latency_ms,
+            }
+        }));
+        return Ok(());
+    }
+
+    // Model comparison table
+    print_header("Model Comparison");
+    print_table(
+        &["Property", &current_model, comparison_model],
+        vec![
+            vec![
+                "Dimensions".to_string(),
+                current_dims.to_string(),
+                comp_dims.to_string(),
+            ],
+            vec![
+                "Avg latency/entity".to_string(),
+                format!("{:.1}ms", curr_latency_ms),
+                format!("{:.1}ms", comp_latency_ms),
+            ],
+            vec![
+                "Avg top-k score".to_string(),
+                format!("{:.4}", avg_curr_score),
+                format!("{:.4}", avg_comp_score),
+            ],
+        ],
+    );
+
+    // Per-query results
+    print_header("Per-Query Results");
+    let query_rows: Vec<Vec<String>> = results
+        .iter()
+        .map(|r| {
+            let q_display = if r.query.len() > 30 {
+                format!("{}...", &r.query[..27])
+            } else {
+                r.query.clone()
+            };
+            vec![
+                q_display,
+                format!("{:.4}", r.current_avg_score),
+                format!("{:.4}", r.comparison_avg_score),
+                format!("{:+.4}", r.score_delta),
+                format!("{:.3}", r.rank_correlation),
+            ]
+        })
+        .collect();
+    print_table(
+        &["Query", "Current", "Comparison", "Delta", "Rank Corr"],
+        query_rows,
+    );
+
+    // Summary
+    print_header("Summary");
+    print_kv("Entities sampled", &entity_count.to_string());
+    print_kv("Queries tested", &results.len().to_string());
+    print_kv("Avg score delta", &format!("{:+.4}", avg_score_delta));
+    print_kv(
+        "Avg rank agreement",
+        &format!("{:.1}%", avg_rank_corr * 100.0),
+    );
+    print_kv(
+        "Latency ratio",
+        &format!("{:.1}x", comp_latency_ms / curr_latency_ms.max(0.01)),
+    );
+
+    if avg_score_delta > 0.01 {
+        println!(
+            "\n  {} Comparison model shows higher similarity scores. Consider switching.",
+            "Recommendation:".green().bold()
+        );
+    } else if avg_score_delta < -0.01 {
+        println!(
+            "\n  {} Current model scores higher. No benefit to switching.",
+            "Recommendation:".green().bold()
+        );
+    } else {
+        println!(
+            "\n  {} Scores are similar. Consider latency/size tradeoff.",
+            "Recommendation:".yellow().bold()
+        );
     }
 
     Ok(())

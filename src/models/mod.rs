@@ -5,6 +5,7 @@ pub mod knowledge;
 pub mod location;
 pub mod note;
 pub mod perception;
+pub mod phase;
 pub mod relationship;
 pub mod scene;
 
@@ -21,6 +22,7 @@ pub use knowledge::{
 pub use location::{Location, LocationCreate, LocationUpdate};
 pub use note::{Note, NoteAttachment, NoteCreate, NoteUpdate};
 pub use perception::{Perception, PerceptionCreate, PerceptionUpdate};
+pub use phase::Phase;
 pub use relationship::{Relationship, RelationshipCreate};
 pub use scene::{
     Involvement, InvolvementCreate, Scene, SceneCreate, SceneParticipant, SceneParticipantCreate,

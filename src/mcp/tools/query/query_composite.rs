@@ -4,22 +4,43 @@ use crate::mcp::{EntityResult, NarraServer, QueryResponse};
 use crate::services::CompositeIntelligenceService;
 
 impl NarraServer {
-    pub(crate) async fn handle_situation_report(&self) -> Result<QueryResponse, String> {
+    pub(crate) async fn handle_situation_report(
+        &self,
+        detail_level: Option<String>,
+        token_budget: usize,
+    ) -> Result<QueryResponse, String> {
         let service = CompositeIntelligenceService::new(self.db.clone());
         let report = service
             .situation_report()
             .await
             .map_err(|e| format!("Situation report failed: {}", e))?;
 
+        // Auto-select detail level from token budget when not explicitly specified
+        let effective_detail = detail_level.as_deref().unwrap_or(match token_budget {
+            0..=1500 => "summary",
+            1501..=3500 => "standard",
+            _ => "full",
+        });
+        let is_full = effective_detail == "full";
+        let is_summary = effective_detail == "summary";
+        let max_items = if is_summary {
+            5
+        } else if is_full {
+            usize::MAX
+        } else {
+            10
+        };
+
         let mut content_parts = Vec::new();
 
         // Irony highlights
         if !report.irony_highlights.is_empty() {
+            let shown = report.irony_highlights.len().min(max_items);
             content_parts.push(format!(
                 "## Dramatic Irony ({} highlights)",
                 report.irony_highlights.len()
             ));
-            for a in &report.irony_highlights {
+            for a in report.irony_highlights.iter().take(shown) {
                 content_parts.push(format!(
                     "- {} knows \"{}\" but {} doesn't (weight: {:.1}, about: {})",
                     a.knowing_character_name,
@@ -29,29 +50,43 @@ impl NarraServer {
                     a.about
                 ));
             }
+            if shown < report.irony_highlights.len() {
+                content_parts.push(format!(
+                    "\n_{} more highlights not shown. Use detail_level='full' for complete report._",
+                    report.irony_highlights.len() - shown
+                ));
+            }
         }
 
         // Knowledge conflicts
         if !report.knowledge_conflicts.is_empty() {
+            let shown = report.knowledge_conflicts.len().min(max_items);
             content_parts.push(format!(
                 "\n## Knowledge Conflicts ({} BelievesWrongly)",
                 report.knowledge_conflicts.len()
             ));
-            for c in &report.knowledge_conflicts {
+            for c in report.knowledge_conflicts.iter().take(shown) {
                 content_parts.push(format!(
                     "- {} believes wrongly about {} (truth: {})",
                     c.character_id, c.target, c.truth_value
+                ));
+            }
+            if shown < report.knowledge_conflicts.len() {
+                content_parts.push(format!(
+                    "\n_{} more conflicts not shown. Use detail_level='full' for complete report._",
+                    report.knowledge_conflicts.len() - shown
                 ));
             }
         }
 
         // Tensions
         if !report.high_tension_pairs.is_empty() {
+            let shown = report.high_tension_pairs.len().min(max_items);
             content_parts.push(format!(
                 "\n## High Tension Pairs ({})",
                 report.high_tension_pairs.len()
             ));
-            for t in &report.high_tension_pairs {
+            for t in report.high_tension_pairs.iter().take(shown) {
                 content_parts.push(format!(
                     "- {} → {} (tension: {}{})",
                     t.observer,
@@ -61,6 +96,12 @@ impl NarraServer {
                         .as_ref()
                         .map(|f| format!(", feels: {}", f))
                         .unwrap_or_default()
+                ));
+            }
+            if shown < report.high_tension_pairs.len() {
+                content_parts.push(format!(
+                    "\n_{} more pairs not shown. Use detail_level='full' for complete report._",
+                    report.high_tension_pairs.len() - shown
                 ));
             }
         }
@@ -146,12 +187,15 @@ impl NarraServer {
                 "Use scene_planning to prepare a scene between characters".to_string(),
             ],
             token_estimate,
+            truncated: None,
         })
     }
 
     pub(crate) async fn handle_character_dossier(
         &self,
         character_id: &str,
+        detail_level: Option<String>,
+        token_budget: usize,
     ) -> Result<QueryResponse, String> {
         let service = CompositeIntelligenceService::new(self.db.clone());
         let dossier = service
@@ -224,13 +268,30 @@ impl NarraServer {
             }
         }
 
-        // Relationship map
+        // Relationship map (with detail level filtering)
         if !dossier.relationship_map.is_empty() {
+            // Auto-select detail level from token budget when not explicitly specified
+            let effective_detail = detail_level.as_deref().unwrap_or(match token_budget {
+                0..=1500 => "summary",
+                1501..=3500 => "standard",
+                _ => "full",
+            });
+            let is_full = effective_detail == "full";
+            let is_summary = effective_detail == "summary";
+            let max_rels = if is_summary {
+                3
+            } else if is_full {
+                usize::MAX
+            } else {
+                10
+            };
+
+            let shown = dossier.relationship_map.len().min(max_rels);
             content_parts.push(format!(
                 "\n## Relationships ({})",
                 dossier.relationship_map.len()
             ));
-            for rel in &dossier.relationship_map {
+            for rel in dossier.relationship_map.iter().take(shown) {
                 let tension_str = rel
                     .tension
                     .map(|t| format!(", tension: {}", t))
@@ -238,6 +299,12 @@ impl NarraServer {
                 content_parts.push(format!(
                     "- {} ({}){}",
                     rel.other_name, rel.rel_type, tension_str
+                ));
+            }
+            if shown < dossier.relationship_map.len() {
+                content_parts.push(format!(
+                    "\n_{} more relationships not shown. Use detail_level='full' for complete list._",
+                    dossier.relationship_map.len() - shown
                 ));
             }
         }
@@ -279,12 +346,15 @@ impl NarraServer {
                 "Use knowledge_asymmetries to explore specific pairwise dynamics".to_string(),
             ],
             token_estimate,
+            truncated: None,
         })
     }
 
     pub(crate) async fn handle_scene_planning(
         &self,
         character_ids: &[String],
+        detail_level: Option<String>,
+        token_budget: usize,
     ) -> Result<QueryResponse, String> {
         if character_ids.len() < 2 {
             return Err("Scene planning requires at least 2 characters".to_string());
@@ -311,9 +381,33 @@ impl NarraServer {
             content_parts.push(format!("Highest tension: {} ↔ {} (level {})", a, b, t));
         }
 
+        // Auto-select detail level from token budget when not explicitly specified
+        let effective_detail = detail_level.as_deref().unwrap_or(match token_budget {
+            0..=1500 => "summary",
+            1501..=3500 => "standard",
+            _ => "full",
+        });
+        let is_full = effective_detail == "full";
+        let is_summary = effective_detail == "summary";
+        let max_dynamics = if is_summary {
+            5
+        } else if is_full {
+            usize::MAX
+        } else {
+            10
+        };
+        let max_facts = if is_summary {
+            5
+        } else if is_full {
+            usize::MAX
+        } else {
+            10
+        };
+
         // Pair dynamics
         content_parts.push("\n## Pair Dynamics".to_string());
-        for d in &plan.pair_dynamics {
+        let shown_dynamics = plan.pair_dynamics.len().min(max_dynamics);
+        for d in plan.pair_dynamics.iter().take(shown_dynamics) {
             content_parts.push(format!(
                 "- {} ↔ {}: {} asymmetries, tension: {}, {} shared scenes{}",
                 d.character_a,
@@ -329,12 +423,25 @@ impl NarraServer {
                     .unwrap_or_default()
             ));
         }
+        if shown_dynamics < plan.pair_dynamics.len() {
+            content_parts.push(format!(
+                "\n_{} more dynamics not shown. Use detail_level='full' for complete list._",
+                plan.pair_dynamics.len() - shown_dynamics
+            ));
+        }
 
         // Facts
         if !plan.applicable_facts.is_empty() {
+            let shown_facts = plan.applicable_facts.len().min(max_facts);
             content_parts.push("\n## Applicable Universe Facts".to_string());
-            for f in &plan.applicable_facts {
+            for f in plan.applicable_facts.iter().take(shown_facts) {
                 content_parts.push(format!("- {}", f));
+            }
+            if shown_facts < plan.applicable_facts.len() {
+                content_parts.push(format!(
+                    "\n_{} more facts not shown. Use detail_level='full' for complete list._",
+                    plan.applicable_facts.len() - shown_facts
+                ));
             }
         }
 
@@ -392,6 +499,7 @@ impl NarraServer {
                 "Use character_dossier for deeper analysis of individual characters".to_string(),
             ],
             token_estimate,
+            truncated: None,
         })
     }
 }

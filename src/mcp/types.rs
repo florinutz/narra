@@ -8,6 +8,12 @@ pub const MAX_LIMIT: usize = 500;
 /// Maximum allowed depth for graph traversals (prevents runaway recursion).
 pub const MAX_DEPTH: usize = 6;
 
+/// Default token budget per tool response (configurable via NARRA_TOKEN_BUDGET env var).
+pub const DEFAULT_TOKEN_BUDGET: usize = 2000;
+
+/// Maximum allowed token budget (prevents unbounded response sizes).
+pub const MAX_TOKEN_BUDGET: usize = 8000;
+
 /// Detail level for entity queries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -102,35 +108,29 @@ pub enum QueryRequest {
         #[serde(default)]
         cursor: Option<String>,
     },
-    /// Semantic search - find entities by meaning, not keywords.
-    /// Uses vector embeddings for psychological/thematic similarity.
-    SemanticSearch {
+    /// Unified search across the world. Mode controls search strategy:
+    /// - "semantic": pure vector similarity (requires embeddings)
+    /// - "hybrid": keyword + semantic combined (graceful degradation)
+    /// - "reranked": hybrid + cross-encoder re-ranking (best precision)
+    UnifiedSearch {
         /// Natural language query (e.g., "characters who struggle with duty")
         query: String,
+        /// "semantic", "hybrid", or "reranked" (default: "hybrid")
+        #[serde(default = "default_search_mode")]
+        mode: String,
         /// Filter by entity types (empty = character, location, event, scene)
         #[serde(default)]
         entity_types: Option<Vec<String>>,
         /// Maximum results (default: 10)
         #[serde(default)]
         limit: Option<usize>,
-        /// Metadata filters: {"roles": "warrior", "loc_type": "castle", "sequence_min": 5, "sequence_max": 20}
+        /// Metadata filters for narrowing results
         #[serde(default)]
-        filter: Option<serde_json::Value>,
-    },
-    /// Hybrid search combining keyword matching with semantic similarity.
-    /// Best for queries mixing names with concepts (e.g., "betrayal scenes with Bob").
-    HybridSearch {
-        /// Natural language query
-        query: String,
-        /// Filter by entity types (empty = character, location, event, scene)
+        filter: Option<SearchMetadataFilter>,
+        /// Filter results to a specific narrative phase (auto-detected).
+        /// Run detect_phases first to discover available phase IDs.
         #[serde(default)]
-        entity_types: Option<Vec<String>>,
-        /// Maximum results (default: 10)
-        #[serde(default)]
-        limit: Option<usize>,
-        /// Metadata filters: {"roles": "warrior", "loc_type": "castle", "sequence_min": 5, "sequence_max": 20}
-        #[serde(default)]
-        filter: Option<serde_json::Value>,
+        phase: Option<usize>,
     },
     /// Find entities that reference a target entity.
     /// Discovers "what scenes mention Alice?" without explicit reverse edges.
@@ -406,30 +406,28 @@ pub enum QueryRequest {
     },
     /// High-level narrative situation report: top irony, conflicts, tensions, themes.
     /// Combines multiple analytics into a single strategic overview.
-    SituationReport,
+    SituationReport {
+        /// Detail level: "summary", "standard" (default), or "full"
+        #[serde(default)]
+        detail_level: Option<String>,
+    },
     /// Comprehensive dossier for a single character: network position, knowledge,
     /// influence, perceptions, and narrative suggestions.
     CharacterDossier {
         /// Character ID (e.g., "character:alice" or just "alice")
         character_id: String,
+        /// Detail level: "summary", "standard" (default), or "full"
+        #[serde(default)]
+        detail_level: Option<String>,
     },
     /// Scene planning for a set of characters about to meet.
     /// Shows pairwise dynamics, irony opportunities, tensions, and applicable facts.
     ScenePlanning {
         /// Character IDs (e.g., ["character:alice", "character:bob"])
         character_ids: Vec<String>,
-    },
-    /// Re-ranked search: hybrid search + cross-encoder re-ranking for better relevance.
-    /// Use when precision matters more than speed.
-    RerankedSearch {
-        /// Natural language query
-        query: String,
-        /// Filter by entity types (empty = all embeddable types)
+        /// Detail level: "summary", "standard" (default), or "full"
         #[serde(default)]
-        entity_types: Option<Vec<String>>,
-        /// Maximum results (default: 10)
-        #[serde(default)]
-        limit: Option<usize>,
+        detail_level: Option<String>,
     },
     /// Compute growth vector for an entity: where is it heading based on arc snapshots.
     /// Finds entities aligned with the trajectory extrapolation.
@@ -552,10 +550,71 @@ pub enum QueryRequest {
         /// Character ID (e.g., "character:alice")
         character_id: String,
     },
+    /// Auto-detect narrative phases by clustering entities using composite
+    /// narrative distance (embeddings + event sequence + scene co-occurrence).
+    DetectPhases {
+        /// Entity types to include (default: all embeddable)
+        #[serde(default)]
+        entity_types: Option<Vec<String>>,
+        /// Number of phases (auto-detected if not specified)
+        #[serde(default)]
+        num_phases: Option<usize>,
+        /// Content weight 0.0-1.0 (default: 0.6)
+        #[serde(default)]
+        content_weight: Option<f32>,
+        /// Neighborhood weight 0.0-1.0 (default: 0.25)
+        #[serde(default)]
+        neighborhood_weight: Option<f32>,
+        /// Temporal weight 0.0-1.0 (default: 0.15)
+        #[serde(default)]
+        temporal_weight: Option<f32>,
+        /// Persist detected phases to database for instant loading
+        #[serde(default)]
+        save: Option<bool>,
+    },
+    /// Load previously saved phases from database (returns nothing if none saved).
+    LoadPhases,
+    /// Find entities narratively close to an anchor entity.
+    /// Uses composite narrative distance (embedding similarity +
+    /// scene co-occurrence + event sequence proximity).
+    QueryAround {
+        /// Anchor entity ID (e.g., "event:betrayal", "character:alice")
+        anchor_id: String,
+        /// Entity types to include in results (default: all embeddable)
+        #[serde(default)]
+        entity_types: Option<Vec<String>>,
+        /// Maximum results (default: 20)
+        #[serde(default)]
+        limit: Option<usize>,
+    },
+    /// Identify entities that bridge multiple narrative phases.
+    /// These "transition points" are characters, events, or locations
+    /// that connect different arcs in the story.
+    DetectTransitions {
+        /// Entity types to include (default: all embeddable)
+        #[serde(default)]
+        entity_types: Option<Vec<String>>,
+        /// Number of phases (auto-detected if not specified)
+        #[serde(default)]
+        num_phases: Option<usize>,
+        /// Content weight 0.0–1.0 (default: 0.6)
+        #[serde(default)]
+        content_weight: Option<f32>,
+        /// Neighborhood weight 0.0–1.0 (default: 0.25)
+        #[serde(default)]
+        neighborhood_weight: Option<f32>,
+        /// Temporal weight 0.0–1.0 (default: 0.15)
+        #[serde(default)]
+        temporal_weight: Option<f32>,
+    },
 }
 
 fn default_investigate_depth() -> usize {
     3
+}
+
+fn default_search_mode() -> String {
+    "hybrid".into()
 }
 
 /// A single issue in validation results.
@@ -566,6 +625,27 @@ pub struct ValidationIssue {
     pub message: String,
     pub suggested_fix: Option<String>,
     pub confidence: f32,
+}
+
+/// Typed metadata filter for semantic and hybrid search.
+/// Provides JSON Schema so LLMs can discover available filter fields.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+pub struct SearchMetadataFilter {
+    /// Filter characters by role (e.g. "warrior"). Checks array membership.
+    #[serde(default)]
+    pub roles: Option<String>,
+    /// Filter by name (case-insensitive substring match)
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Filter events with sequence >= this value
+    #[serde(default)]
+    pub sequence_min: Option<i64>,
+    /// Filter events with sequence <= this value
+    #[serde(default)]
+    pub sequence_max: Option<i64>,
+    /// Filter locations by type (e.g. "castle", "forest")
+    #[serde(default)]
+    pub loc_type: Option<String>,
 }
 
 /// Spec for a character in batch creation.
@@ -921,6 +1001,9 @@ pub enum MutationRequest {
     BatchCreateRelationships {
         relationships: Vec<RelationshipSpec>,
     },
+    /// Batch-record knowledge for multiple characters in one call.
+    /// Each entry creates a knowledge entity and a knowledge state edge.
+    BatchRecordKnowledge { knowledge: Vec<KnowledgeSpec> },
     /// Generate embeddings for all existing entities.
     /// Run after first setup or when embedding model changes.
     BackfillEmbeddings {
@@ -961,6 +1044,26 @@ pub enum MutationRequest {
         #[serde(default)]
         on_conflict: ConflictMode,
     },
+    /// Detect and persist narrative phases to database. Re-detection replaces all saved phases.
+    SavePhases {
+        /// Entity types to include (default: all embeddable)
+        #[serde(default)]
+        entity_types: Option<Vec<String>>,
+        /// Number of phases (auto-detected if not specified)
+        #[serde(default)]
+        num_phases: Option<usize>,
+        /// Content weight 0.0-1.0 (default: 0.6)
+        #[serde(default)]
+        content_weight: Option<f32>,
+        /// Neighborhood weight 0.0-1.0 (default: 0.25)
+        #[serde(default)]
+        neighborhood_weight: Option<f32>,
+        /// Temporal weight 0.0-1.0 (default: 0.15)
+        #[serde(default)]
+        temporal_weight: Option<f32>,
+    },
+    /// Clear all saved phases from database.
+    ClearPhases,
 }
 
 /// Single entity result.
@@ -1164,6 +1267,10 @@ pub struct ValidateEntityInput {
 pub struct QueryInput {
     /// Operation name (lookup, search, semantic_search, etc.)
     pub operation: String,
+    /// Optional per-request token budget. Overrides tool-type default and env var.
+    /// Capped at MAX_TOKEN_BUDGET (8000).
+    #[serde(default)]
+    pub token_budget: Option<usize>,
     /// Operation-specific parameters (validated at runtime)
     #[serde(flatten)]
     pub params: serde_json::Map<String, serde_json::Value>,
@@ -1189,6 +1296,19 @@ pub struct SessionInput {
     pub params: serde_json::Map<String, serde_json::Value>,
 }
 
+/// Information about response truncation due to token budget constraints.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct TruncationInfo {
+    /// Reason for truncation ("token_budget" or "result_limit")
+    pub reason: String,
+    /// Total results before truncation
+    pub original_count: usize,
+    /// Results actually returned
+    pub returned_count: usize,
+    /// Hint for getting more data (e.g., "Use limit=50" or "Narrow your query")
+    pub suggestion: String,
+}
+
 /// Query response with multiple results.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct QueryResponse {
@@ -1204,6 +1324,9 @@ pub struct QueryResponse {
     pub hints: Vec<String>,
     /// Estimated token count for this response
     pub token_estimate: usize,
+    /// Truncation info if response was truncated due to token budget
+    #[serde(default)]
+    pub truncated: Option<TruncationInfo>,
 }
 
 /// Impact summary for mutations.

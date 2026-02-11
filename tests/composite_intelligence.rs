@@ -158,7 +158,7 @@ async fn test_situation_report_mcp() {
     let harness = TestHarness::new().await;
     let server = create_test_server(&harness).await;
 
-    let request = QueryRequest::SituationReport;
+    let request = QueryRequest::SituationReport { detail_level: None };
     let response = server
         .handle_query(Parameters(to_query_input(request)))
         .await
@@ -286,6 +286,7 @@ async fn test_character_dossier_mcp() {
 
     let request = QueryRequest::CharacterDossier {
         character_id: alice.id.to_string(),
+        detail_level: None,
     };
     let response = server
         .handle_query(Parameters(to_query_input(request)))
@@ -402,6 +403,7 @@ async fn test_scene_planning_mcp_validation() {
     // Too few characters
     let request = QueryRequest::ScenePlanning {
         character_ids: vec!["alice".to_string()],
+        detail_level: None,
     };
     let result = server
         .handle_query(Parameters(to_query_input(request)))
@@ -437,6 +439,7 @@ async fn test_scene_planning_mcp() {
 
     let request = QueryRequest::ScenePlanning {
         character_ids: vec!["character:alice".to_string(), "character:bob".to_string()],
+        detail_level: None,
     };
     let response = server
         .handle_query(Parameters(to_query_input(request)))
@@ -445,4 +448,335 @@ async fn test_scene_planning_mcp() {
 
     assert_eq!(response.results.len(), 1);
     assert!(response.results[0].name.contains("Scene Plan"));
+}
+
+// =============================================================================
+// DETAIL LEVEL TESTS
+// =============================================================================
+
+/// Test SituationReport with detail_level parameter accepts all modes.
+#[tokio::test]
+async fn test_situation_report_detail_levels() {
+    let harness = TestHarness::new().await;
+    let server = create_test_server(&harness).await;
+
+    // Create enough data for truncation to matter
+    let names = ["Alice", "Bob", "Carol", "Dave", "Eve", "Frank", "Grace"];
+    let mut keys = Vec::new();
+    for name in &names {
+        let c = create_character(
+            &harness.db,
+            CharacterCreate {
+                name: (*name).into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        keys.push(c.id.key().to_string());
+    }
+
+    // Create high-tension perceptions between many pairs
+    for i in 0..keys.len() - 1 {
+        create_perception_pair(
+            &harness.db,
+            &keys[i],
+            &keys[i + 1],
+            PerceptionCreate {
+                rel_types: vec!["rival".to_string()],
+                subtype: None,
+                feelings: Some("hostile".to_string()),
+                perception: None,
+                tension_level: Some(8),
+                history_notes: None,
+            },
+            PerceptionCreate {
+                rel_types: vec!["ally".to_string()],
+                subtype: None,
+                feelings: Some("neutral".to_string()),
+                perception: None,
+                tension_level: Some(3),
+                history_notes: None,
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    // All three detail levels should succeed
+    for level in &["summary", "standard", "full"] {
+        let request = QueryRequest::SituationReport {
+            detail_level: Some(level.to_string()),
+        };
+        let response = server
+            .handle_query(Parameters(to_query_input(request)))
+            .await
+            .unwrap_or_else(|_| panic!("SituationReport detail_level='{}' should succeed", level));
+
+        assert_eq!(response.results.len(), 1);
+        assert_eq!(response.results[0].entity_type, "report");
+    }
+
+    // Summary with enough data should contain truncation hint
+    let summary_request = QueryRequest::SituationReport {
+        detail_level: Some("summary".to_string()),
+    };
+    let summary_response = server
+        .handle_query(Parameters(to_query_input(summary_request)))
+        .await
+        .expect("Summary should succeed");
+
+    let summary_content = &summary_response.results[0].content;
+    // With 6 high-tension pairs (>5 summary limit), should see truncation hint
+    if summary_content.contains("High Tension Pairs") {
+        assert!(
+            summary_content.contains("not shown") || summary_content.contains("detail_level"),
+            "Summary should indicate truncation for tension pairs when > 5 pairs"
+        );
+    }
+}
+
+/// Test CharacterDossier with detail_level="summary" limits relationships shown.
+#[tokio::test]
+async fn test_character_dossier_detail_level_summary() {
+    let harness = TestHarness::new().await;
+    let server = create_test_server(&harness).await;
+
+    let alice = create_character(
+        &harness.db,
+        CharacterCreate {
+            name: "Alice".into(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    // Create many relationships so truncation kicks in (summary=3, standard=10)
+    for name in ["Bob", "Carol", "Dave", "Eve", "Frank"] {
+        let other = create_character(
+            &harness.db,
+            CharacterCreate {
+                name: name.into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        let alice_key = alice.id.key().to_string();
+        let other_key = other.id.key().to_string();
+        create_perception_pair(
+            &harness.db,
+            &alice_key,
+            &other_key,
+            PerceptionCreate {
+                rel_types: vec!["ally".to_string()],
+                subtype: None,
+                feelings: Some("friendly".to_string()),
+                perception: None,
+                tension_level: Some(3),
+                history_notes: None,
+            },
+            PerceptionCreate {
+                rel_types: vec!["ally".to_string()],
+                subtype: None,
+                feelings: Some("friendly".to_string()),
+                perception: None,
+                tension_level: Some(2),
+                history_notes: None,
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    // Summary mode
+    let summary_request = QueryRequest::CharacterDossier {
+        character_id: alice.id.to_string(),
+        detail_level: Some("summary".to_string()),
+    };
+    let summary_response = server
+        .handle_query(Parameters(to_query_input(summary_request)))
+        .await
+        .expect("Summary dossier should succeed");
+
+    // Full mode
+    let full_request = QueryRequest::CharacterDossier {
+        character_id: alice.id.to_string(),
+        detail_level: Some("full".to_string()),
+    };
+    let full_response = server
+        .handle_query(Parameters(to_query_input(full_request)))
+        .await
+        .expect("Full dossier should succeed");
+
+    // Summary should be shorter
+    let summary_len = summary_response.results[0].content.len();
+    let full_len = full_response.results[0].content.len();
+    assert!(
+        summary_len <= full_len,
+        "Summary ({} chars) should be <= full ({} chars)",
+        summary_len,
+        full_len
+    );
+
+    // Summary with many relationships should contain truncation hint
+    let summary_content = &summary_response.results[0].content;
+    if summary_content.contains("Relationships") {
+        // If there are relationships shown, summary should hint at more
+        assert!(
+            summary_content.contains("not shown") || summary_content.contains("Relationships ("),
+            "Summary should indicate truncated relationships"
+        );
+    }
+}
+
+/// Test ScenePlanning with detail_level="summary" limits pair dynamics shown.
+#[tokio::test]
+async fn test_scene_planning_detail_level_summary() {
+    let harness = TestHarness::new().await;
+    let server = create_test_server(&harness).await;
+
+    let alice = create_character(
+        &harness.db,
+        CharacterCreate {
+            name: "Alice".into(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    let bob = create_character(
+        &harness.db,
+        CharacterCreate {
+            name: "Bob".into(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    // Summary mode
+    let summary_request = QueryRequest::ScenePlanning {
+        character_ids: vec![alice.id.to_string(), bob.id.to_string()],
+        detail_level: Some("summary".to_string()),
+    };
+    let summary_response = server
+        .handle_query(Parameters(to_query_input(summary_request)))
+        .await
+        .expect("Summary scene planning should succeed");
+
+    // Full mode
+    let full_request = QueryRequest::ScenePlanning {
+        character_ids: vec![alice.id.to_string(), bob.id.to_string()],
+        detail_level: Some("full".to_string()),
+    };
+    let full_response = server
+        .handle_query(Parameters(to_query_input(full_request)))
+        .await
+        .expect("Full scene planning should succeed");
+
+    let summary_len = summary_response.results[0].content.len();
+    let full_len = full_response.results[0].content.len();
+    assert!(
+        summary_len <= full_len,
+        "Summary ({} chars) should be <= full ({} chars)",
+        summary_len,
+        full_len
+    );
+}
+
+// =============================================================================
+// TRUNCATED FIELD & TOKEN BUDGET TESTS
+// =============================================================================
+
+/// Test that QueryResponse.truncated is None when response fits budget.
+#[tokio::test]
+async fn test_truncated_field_none_when_fits_budget() {
+    let harness = TestHarness::new().await;
+    let server = create_test_server(&harness).await;
+
+    // Small query — should fit default budget
+    let request = QueryRequest::SituationReport {
+        detail_level: Some("summary".to_string()),
+    };
+    let response = server
+        .handle_query(Parameters(to_query_input(request)))
+        .await
+        .expect("Should succeed");
+
+    // Empty world situation report is small, should not be truncated
+    assert!(
+        response.truncated.is_none(),
+        "Small response should not be truncated"
+    );
+}
+
+/// Test that hints are truncated to max 3.
+#[tokio::test]
+async fn test_hints_max_three() {
+    let harness = TestHarness::new().await;
+    let server = create_test_server(&harness).await;
+
+    let alice = create_character(
+        &harness.db,
+        CharacterCreate {
+            name: "Alice".into(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    // Lookup — generates hints
+    let request = QueryRequest::Lookup {
+        entity_id: alice.id.to_string(),
+        detail_level: Some(narra::mcp::DetailLevel::Standard),
+    };
+    let response = server
+        .handle_query(Parameters(to_query_input(request)))
+        .await
+        .expect("Lookup should succeed");
+
+    assert!(
+        response.hints.len() <= 3,
+        "Hints should be capped at 3, got {}",
+        response.hints.len()
+    );
+}
+
+/// Test that search results also have hints capped at 3.
+#[tokio::test]
+async fn test_search_hints_max_three() {
+    let harness = TestHarness::new().await;
+    let server = create_test_server(&harness).await;
+
+    create_character(
+        &harness.db,
+        CharacterCreate {
+            name: "Alice".into(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    let request = QueryRequest::Search {
+        query: "Alice".to_string(),
+        entity_types: None,
+        limit: None,
+        cursor: None,
+    };
+    let response = server
+        .handle_query(Parameters(to_query_input(request)))
+        .await
+        .expect("Search should succeed");
+
+    assert!(
+        response.hints.len() <= 3,
+        "Search hints should be capped at 3, got {}",
+        response.hints.len()
+    );
 }

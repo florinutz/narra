@@ -1,6 +1,7 @@
 pub mod arc;
 pub mod clustering;
 pub mod composite;
+
 pub mod consistency;
 pub mod context;
 pub mod export;
@@ -13,6 +14,7 @@ pub mod irony;
 pub mod perception;
 pub mod search;
 pub mod summary;
+pub mod temporal;
 pub mod vector_ops;
 
 pub use clustering::{ClusteringResult, ClusteringService, ThemeCluster};
@@ -46,6 +48,10 @@ pub use summary::{
 pub use arc::{ArcComparisonResult, ArcHistoryResult, ArcMomentResult, ArcService};
 pub use perception::{
     PerceptionGapResult, PerceptionMatrixResult, PerceptionService, PerceptionShiftResult,
+};
+pub use temporal::{
+    NarrativeNeighbor, NarrativeNeighborhood, NarrativePhase, PhaseDetectionResult, PhaseMember,
+    PhaseWeights, TemporalService,
 };
 pub use vector_ops::{
     ConvergenceResult, GrowthVectorResult, MidpointResult, MisperceptionResult, VectorOpsService,

@@ -10,8 +10,11 @@ mod query_validation;
 mod query_vector_ops;
 
 use crate::mcp::NarraServer;
-use crate::mcp::{EntityResult, QueryInput, QueryRequest, QueryResponse, MAX_DEPTH, MAX_LIMIT};
-use crate::services::{FilterOp, MetadataFilter};
+use crate::mcp::{
+    EntityResult, QueryInput, QueryRequest, QueryResponse, SearchMetadataFilter, TruncationInfo,
+    DEFAULT_TOKEN_BUDGET, MAX_DEPTH, MAX_LIMIT, MAX_TOKEN_BUDGET,
+};
+use crate::services::{EntityType, FilterOp, MetadataFilter};
 use base64::{engine::general_purpose, Engine as _};
 use rmcp::handler::server::wrapper::Parameters;
 use serde::{Deserialize, Serialize};
@@ -34,43 +37,169 @@ pub(crate) fn parse_cursor(cursor: &str) -> Result<CursorData, String> {
     serde_json::from_slice(&decoded).map_err(|_| "Invalid cursor data".to_string())
 }
 
-/// Parse a JSON object into metadata filters.
-///
-/// Known fields are mapped to appropriate filter operations:
-/// - "roles" -> Contains (for array membership)
-/// - "name" -> Eq (case-insensitive substring)
-/// - "sequence_min" -> Gte
-/// - "sequence_max" -> Lte
-/// - "loc_type" -> Eq
-///
-///   Unknown fields are silently ignored.
-pub(crate) fn parse_metadata_filter(filter: &serde_json::Value) -> Vec<MetadataFilter> {
-    let obj = match filter.as_object() {
-        Some(o) => o,
-        None => return vec![],
-    };
-
+/// Convert a typed `SearchMetadataFilter` into internal `MetadataFilter` predicates.
+pub(crate) fn parse_metadata_filter(filter: &SearchMetadataFilter) -> Vec<MetadataFilter> {
     let mut filters = Vec::new();
 
-    for (key, value) in obj {
-        let (op, bind_key) = match key.as_str() {
-            "roles" => (FilterOp::Contains, "filter_roles".to_string()),
-            "name" => (FilterOp::Eq, "filter_name".to_string()),
-            "sequence_min" => (FilterOp::Gte, "filter_sequence_min".to_string()),
-            "sequence_max" => (FilterOp::Lte, "filter_sequence_max".to_string()),
-            "loc_type" => (FilterOp::Eq, "filter_loc_type".to_string()),
-            _ => continue, // Silently ignore unknown fields
-        };
-
+    if let Some(ref roles) = filter.roles {
         filters.push(MetadataFilter {
-            field: key.clone(),
-            op,
-            bind_key,
-            value: value.clone(),
+            field: "roles".into(),
+            op: FilterOp::Contains,
+            bind_key: "filter_roles".into(),
+            value: serde_json::json!(roles),
+        });
+    }
+    if let Some(ref name) = filter.name {
+        filters.push(MetadataFilter {
+            field: "name".into(),
+            op: FilterOp::Eq,
+            bind_key: "filter_name".into(),
+            value: serde_json::json!(name),
+        });
+    }
+    if let Some(seq_min) = filter.sequence_min {
+        filters.push(MetadataFilter {
+            field: "sequence_min".into(),
+            op: FilterOp::Gte,
+            bind_key: "filter_sequence_min".into(),
+            value: serde_json::json!(seq_min),
+        });
+    }
+    if let Some(seq_max) = filter.sequence_max {
+        filters.push(MetadataFilter {
+            field: "sequence_max".into(),
+            op: FilterOp::Lte,
+            bind_key: "filter_sequence_max".into(),
+            value: serde_json::json!(seq_max),
+        });
+    }
+    if let Some(ref loc_type) = filter.loc_type {
+        filters.push(MetadataFilter {
+            field: "loc_type".into(),
+            op: FilterOp::Eq,
+            bind_key: "filter_loc_type".into(),
+            value: serde_json::json!(loc_type),
         });
     }
 
     filters
+}
+
+/// Parse entity type strings into EntityType enums, filtering to embeddable types.
+/// Returns empty vec if input is None (callers decide default behavior).
+/// Per-tool-type default token budget. Composite reports get more room,
+/// simple lookups get less. Falls back to DEFAULT_TOKEN_BUDGET for uncategorized ops.
+fn tool_type_budget(request: &QueryRequest) -> usize {
+    match request {
+        // Composite reports — naturally verbose, single result with rich content
+        QueryRequest::SituationReport { .. }
+        | QueryRequest::CharacterDossier { .. }
+        | QueryRequest::ScenePlanning { .. } => 4000,
+
+        // Single-entity lookups — concise
+        QueryRequest::Lookup { .. }
+        | QueryRequest::GetFact { .. }
+        | QueryRequest::ArcMoment { .. }
+        | QueryRequest::CharacterVoice { .. } => 1000,
+
+        // Analysis/intelligence tools — medium-high
+        QueryRequest::KnowledgeAsymmetries { .. }
+        | QueryRequest::PerceptionGap { .. }
+        | QueryRequest::WhatIf { .. }
+        | QueryRequest::AnalyzeImpact { .. }
+        | QueryRequest::KnowledgeGapAnalysis { .. }
+        | QueryRequest::InvestigateContradictions { .. }
+        | QueryRequest::ConvergenceAnalysis { .. }
+        | QueryRequest::DetectPhases { .. }
+        | QueryRequest::DetectTransitions { .. }
+        | QueryRequest::LoadPhases => 3000,
+
+        // Everything else (searches, lists, graphs) — standard
+        _ => DEFAULT_TOKEN_BUDGET,
+    }
+}
+
+pub(crate) fn parse_entity_types(types: Option<Vec<String>>) -> Vec<EntityType> {
+    types
+        .map(|ts| {
+            ts.iter()
+                .filter_map(|t| match t.to_lowercase().as_str() {
+                    "character" => Some(EntityType::Character),
+                    "location" => Some(EntityType::Location),
+                    "event" => Some(EntityType::Event),
+                    "scene" => Some(EntityType::Scene),
+                    "knowledge" => Some(EntityType::Knowledge),
+                    "note" => Some(EntityType::Note),
+                    "fact" => Some(EntityType::Fact),
+                    _ => None,
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mcp::SearchMetadataFilter;
+
+    #[test]
+    fn test_parse_empty_filter() {
+        let filter = SearchMetadataFilter::default();
+        let result = parse_metadata_filter(&filter);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_parse_roles_filter() {
+        let filter = SearchMetadataFilter {
+            roles: Some("warrior".to_string()),
+            ..Default::default()
+        };
+        let result = parse_metadata_filter(&filter);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].field, "roles");
+        assert!(matches!(result[0].op, FilterOp::Contains));
+    }
+
+    #[test]
+    fn test_parse_sequence_range_filter() {
+        let filter = SearchMetadataFilter {
+            sequence_min: Some(10),
+            sequence_max: Some(50),
+            ..Default::default()
+        };
+        let result = parse_metadata_filter(&filter);
+        assert_eq!(result.len(), 2);
+        assert!(matches!(result[0].op, FilterOp::Gte));
+        assert!(matches!(result[1].op, FilterOp::Lte));
+    }
+
+    #[test]
+    fn test_parse_all_filters() {
+        let filter = SearchMetadataFilter {
+            roles: Some("warrior".to_string()),
+            name: Some("Alice".to_string()),
+            sequence_min: Some(1),
+            sequence_max: Some(100),
+            loc_type: Some("castle".to_string()),
+        };
+        let result = parse_metadata_filter(&filter);
+        assert_eq!(result.len(), 5);
+    }
+
+    #[test]
+    fn test_cursor_roundtrip() {
+        let cursor = create_cursor(42);
+        let parsed = parse_cursor(&cursor).expect("Should parse");
+        assert_eq!(parsed.offset, 42);
+    }
+
+    #[test]
+    fn test_invalid_cursor() {
+        let result = parse_cursor("not-valid-base64!!!");
+        assert!(result.is_err());
+    }
 }
 
 impl NarraServer {
@@ -79,6 +208,9 @@ impl NarraServer {
         &self,
         Parameters(input): Parameters<QueryInput>,
     ) -> Result<QueryResponse, String> {
+        // Extract per-request budget before consuming input for deserialization
+        let request_budget = input.token_budget;
+
         // Reconstruct the full request object for deserialization
         let mut full_request = serde_json::Map::new();
         full_request.insert("operation".to_string(), serde_json::json!(input.operation));
@@ -88,7 +220,21 @@ impl NarraServer {
         let request: QueryRequest = serde_json::from_value(serde_json::Value::Object(full_request))
             .map_err(|e| format!("Invalid query parameters: {}", e))?;
 
-        match request {
+        // Resolve effective token budget:
+        // 1. Per-request token_budget (if caller specified)
+        // 2. NARRA_TOKEN_BUDGET env var (if set — global override)
+        // 3. Per-tool-type default
+        let env_budget: Option<usize> = std::env::var("NARRA_TOKEN_BUDGET")
+            .ok()
+            .and_then(|s| s.parse().ok());
+
+        let token_budget = request_budget
+            .or(env_budget)
+            .unwrap_or_else(|| tool_type_budget(&request))
+            .min(MAX_TOKEN_BUDGET);
+
+        // Execute query handler
+        let mut response = match request {
             QueryRequest::Lookup {
                 entity_id,
                 detail_level,
@@ -157,31 +303,21 @@ impl NarraServer {
                 )
                 .await
             }
-            QueryRequest::SemanticSearch {
+            QueryRequest::UnifiedSearch {
                 query,
+                mode,
                 entity_types,
                 limit,
                 filter,
+                phase,
             } => {
-                self.handle_semantic_search(
+                self.handle_unified_search(
                     &query,
+                    &mode,
                     entity_types,
                     limit.unwrap_or(10).min(MAX_LIMIT),
                     filter,
-                )
-                .await
-            }
-            QueryRequest::HybridSearch {
-                query,
-                entity_types,
-                limit,
-                filter,
-            } => {
-                self.handle_hybrid_search(
-                    &query,
-                    entity_types,
-                    limit.unwrap_or(10).min(MAX_LIMIT),
-                    filter,
+                    phase,
                 )
                 .await
             }
@@ -409,19 +545,22 @@ impl NarraServer {
                 self.handle_knowledge_asymmetries(&character_a, &character_b)
                     .await
             }
-            QueryRequest::SituationReport => self.handle_situation_report().await,
-            QueryRequest::CharacterDossier { character_id } => {
-                self.handle_character_dossier(&character_id).await
+            QueryRequest::SituationReport { detail_level } => {
+                self.handle_situation_report(detail_level, token_budget)
+                    .await
             }
-            QueryRequest::ScenePlanning { character_ids } => {
-                self.handle_scene_planning(&character_ids).await
-            }
-            QueryRequest::RerankedSearch {
-                query,
-                entity_types,
-                limit,
+            QueryRequest::CharacterDossier {
+                character_id,
+                detail_level,
             } => {
-                self.handle_reranked_search(&query, entity_types, limit)
+                self.handle_character_dossier(&character_id, detail_level, token_budget)
+                    .await
+            }
+            QueryRequest::ScenePlanning {
+                character_ids,
+                detail_level,
+            } => {
+                self.handle_scene_planning(&character_ids, detail_level, token_budget)
                     .await
             }
             QueryRequest::GrowthVector { entity_id, limit } => {
@@ -495,12 +634,118 @@ impl NarraServer {
             QueryRequest::CharacterFacets { character_id } => {
                 self.handle_character_facets(&character_id).await
             }
+            QueryRequest::DetectPhases {
+                entity_types,
+                num_phases,
+                content_weight,
+                neighborhood_weight,
+                temporal_weight,
+                save,
+            } => {
+                self.handle_detect_phases(
+                    entity_types,
+                    num_phases,
+                    content_weight,
+                    neighborhood_weight,
+                    temporal_weight,
+                    save.unwrap_or(false),
+                )
+                .await
+            }
+            QueryRequest::LoadPhases => self.handle_load_phases().await,
+            QueryRequest::QueryAround {
+                anchor_id,
+                entity_types,
+                limit,
+            } => {
+                self.handle_query_around(
+                    &anchor_id,
+                    entity_types,
+                    limit.unwrap_or(20).min(MAX_LIMIT),
+                )
+                .await
+            }
+            QueryRequest::DetectTransitions {
+                entity_types,
+                num_phases,
+                content_weight,
+                neighborhood_weight,
+                temporal_weight,
+            } => {
+                self.handle_detect_transitions(
+                    entity_types,
+                    num_phases,
+                    content_weight,
+                    neighborhood_weight,
+                    temporal_weight,
+                )
+                .await
+            }
+        }?;
+
+        // Apply token budget enforcement if response exceeds limit
+        if response.token_estimate > token_budget && !response.results.is_empty() {
+            let (truncated_results, truncation_info) =
+                self.apply_token_budget(response.results, token_budget, "query");
+
+            response.results = truncated_results;
+            response.truncated = truncation_info;
+            response.token_estimate = self.estimate_tokens_from_results(&response.results);
         }
+
+        Ok(response)
     }
 
     // Helper methods
     fn estimate_tokens_from_results(&self, results: &[EntityResult]) -> usize {
         results.iter().map(|r| r.content.len() / 4 + 20).sum()
+    }
+
+    /// Truncate results to fit within token budget while preserving utility.
+    /// Returns (truncated_results, truncation_info_opt)
+    fn apply_token_budget(
+        &self,
+        results: Vec<EntityResult>,
+        budget: usize,
+        _query_name: &str,
+    ) -> (Vec<EntityResult>, Option<TruncationInfo>) {
+        let full_tokens = self.estimate_tokens_from_results(&results);
+
+        if full_tokens <= budget {
+            return (results, None);
+        }
+
+        // Binary search for max results that fit budget
+        let mut kept_results = Vec::new();
+        let mut running_tokens = 50; // Response envelope overhead
+
+        for result in results.iter() {
+            let result_tokens = result.content.len() / 4 + 20;
+            if running_tokens + result_tokens > budget && !kept_results.is_empty() {
+                break;
+            }
+            running_tokens += result_tokens;
+            kept_results.push(result.clone());
+        }
+
+        let truncation = TruncationInfo {
+            reason: "token_budget".to_string(),
+            original_count: results.len(),
+            returned_count: kept_results.len(),
+            suggestion: format!(
+                "Response truncated from {} to {} results to fit token budget. \
+                 Use pagination or narrow your query.",
+                results.len(),
+                kept_results.len()
+            ),
+        };
+
+        (kept_results, Some(truncation))
+    }
+
+    /// Prioritize and truncate hints to max 3 items.
+    fn truncate_hints(&self, hints: Vec<String>) -> Vec<String> {
+        hints.into_iter().take(3).collect()
     }
 
     async fn generate_lookup_hints(&self, entity_id: &str, result: &EntityResult) -> Vec<String> {
@@ -523,7 +768,7 @@ impl NarraServer {
             _ => {}
         }
 
-        hints
+        self.truncate_hints(hints)
     }
 
     fn generate_search_hints(&self, _query: &str, results: &[EntityResult]) -> Vec<String> {
@@ -544,10 +789,10 @@ impl NarraServer {
         }
 
         hints.push(
-            "Try hybrid_search for results combining keyword matches with semantic similarity"
+            "Try unified_search (mode: hybrid) for results combining keyword matches with semantic similarity"
                 .to_string(),
         );
 
-        hints
+        self.truncate_hints(hints)
     }
 }

@@ -33,6 +33,7 @@ impl NarraServer {
                     "Run BaselineArcSnapshots to capture initial state, then update the entity to generate snapshots".to_string(),
                 ],
                 token_estimate: 0,
+            truncated: None,
             });
         }
 
@@ -94,6 +95,7 @@ impl NarraServer {
             next_cursor: None,
             hints,
             token_estimate,
+            truncated: None,
         })
     }
 
@@ -167,6 +169,7 @@ impl NarraServer {
             next_cursor: None,
             hints,
             token_estimate,
+            truncated: None,
         })
     }
 
@@ -236,6 +239,7 @@ impl NarraServer {
                     "Run BaselineArcSnapshots, then update entities to generate snapshots with deltas.".to_string(),
                 ],
                 token_estimate: 0,
+            truncated: None,
             });
         }
 
@@ -323,6 +327,7 @@ impl NarraServer {
             next_cursor: None,
             hints,
             token_estimate,
+            truncated: None,
         })
     }
 
@@ -391,6 +396,7 @@ impl NarraServer {
             next_cursor: None,
             hints,
             token_estimate,
+            truncated: None,
         })
     }
 
@@ -519,6 +525,7 @@ impl NarraServer {
             next_cursor: None,
             hints,
             token_estimate,
+            truncated: None,
         })
     }
 
@@ -862,6 +869,7 @@ impl NarraServer {
             next_cursor: None,
             hints,
             token_estimate,
+            truncated: None,
         })
     }
 
@@ -924,6 +932,7 @@ impl NarraServer {
                     "Run backfill_character_facets to generate facet snapshots".to_string(),
                 ],
                 token_estimate: 0,
+                truncated: None,
             });
         }
 
@@ -1002,6 +1011,7 @@ impl NarraServer {
             next_cursor: None,
             hints,
             token_estimate,
+            truncated: None,
         })
     }
 }

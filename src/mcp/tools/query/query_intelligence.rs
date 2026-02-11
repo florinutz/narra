@@ -56,6 +56,7 @@ impl NarraServer {
                 next_cursor: None,
                 hints: vec!["Try lowering min_tension to see more relationships".to_string()],
                 token_estimate: 50,
+                truncated: None,
             });
         }
 
@@ -108,6 +109,7 @@ impl NarraServer {
                 "Use conflict_detection prompt to explore escalation paths".to_string(),
             ],
             token_estimate,
+            truncated: None,
         })
     }
 
@@ -303,6 +305,7 @@ impl NarraServer {
                 "Use knowledge_asymmetries for pairwise comparison".to_string(),
             ],
             token_estimate,
+            truncated: None,
         })
     }
 
@@ -471,6 +474,7 @@ impl NarraServer {
                 "Use tension_matrix for a world-wide tension overview".to_string(),
             ],
             token_estimate,
+            truncated: None,
         })
     }
 
@@ -649,6 +653,7 @@ impl NarraServer {
                 "Use situation_report for a high-level narrative overview".to_string(),
             ],
             token_estimate,
+            truncated: None,
         })
     }
 
@@ -860,6 +865,7 @@ impl NarraServer {
                 "Use knowledge_gap_analysis to see their blind spots in detail".to_string(),
             ],
             token_estimate,
+            truncated: None,
         })
     }
 }

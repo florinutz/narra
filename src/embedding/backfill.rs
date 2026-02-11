@@ -12,12 +12,12 @@ use serde::Serialize;
 use tracing::info;
 
 use crate::embedding::composite::{
-    character_composite, event_composite, identity_composite, knowledge_composite,
-    location_composite, narrative_composite, perspective_composite, psychology_composite,
-    relationship_composite, scene_composite, social_composite,
+    character_composite, event_composite, fact_composite, identity_composite, knowledge_composite,
+    location_composite, narrative_composite, note_composite, perspective_composite,
+    psychology_composite, relationship_composite, scene_composite, social_composite,
 };
 use crate::embedding::EmbeddingService;
-use crate::models::{Character, Event, Location, Scene};
+use crate::models::{Character, Event, Location, Note, Scene, UniverseFact};
 use crate::NarraError;
 
 /// Statistics from a backfill operation.
@@ -177,6 +177,8 @@ impl BackfillService {
             "knowledge",
             "perspective",
             "relationship",
+            "note",
+            "fact",
         ] {
             let type_stats = self.backfill_type(entity_type).await?;
             stats.total_entities += type_stats.total_entities;
@@ -245,6 +247,8 @@ impl BackfillService {
             "knowledge" => self.backfill_knowledge(&mut stats).await?,
             "perspective" => self.backfill_perspectives(&mut stats).await?,
             "relationship" => self.backfill_relationships(&mut stats).await?,
+            "note" => self.backfill_notes(&mut stats).await?,
+            "fact" => self.backfill_facts(&mut stats).await?,
             _ => {
                 return Err(NarraError::Database(format!(
                     "Unknown entity type for backfill: {}",
@@ -269,9 +273,11 @@ impl BackfillService {
 
         stats.total_entities += characters.len();
 
-        // Bulk pre-fetch all relationships and perceptions to avoid N+1
-        let all_relationships = self.get_all_character_relationships().await?;
-        let all_perceptions = self.get_all_character_perceptions().await?;
+        // Bulk pre-fetch all relationships and perceptions in parallel
+        let (all_relationships, all_perceptions) = tokio::try_join!(
+            self.get_all_character_relationships(),
+            self.get_all_character_perceptions(),
+        )?;
 
         for chunk in characters.chunks(50) {
             let mut texts = Vec::new();
@@ -472,21 +478,26 @@ impl BackfillService {
                 let observer_name = edge.observer_name.as_deref().unwrap_or("Someone");
                 let target_name = edge.target_name.as_deref().unwrap_or("Someone");
 
-                let knowledge = if let (Some(ref obs_id), Some(ref tgt_name)) =
-                    (&edge.observer_id, &edge.target_name)
-                {
-                    self.fetch_knowledge_about(obs_id, tgt_name).await
-                } else {
-                    vec![]
-                };
-
-                let shared_scenes = if let (Some(ref obs_id), Some(ref tgt_id)) =
-                    (&edge.observer_id, &edge.target_id)
-                {
-                    self.fetch_shared_scenes(obs_id, tgt_id).await
-                } else {
-                    vec![]
-                };
+                let (knowledge, shared_scenes) = tokio::join!(
+                    async {
+                        if let (Some(ref obs_id), Some(ref tgt_name)) =
+                            (&edge.observer_id, &edge.target_name)
+                        {
+                            self.fetch_knowledge_about(obs_id, tgt_name).await
+                        } else {
+                            vec![]
+                        }
+                    },
+                    async {
+                        if let (Some(ref obs_id), Some(ref tgt_id)) =
+                            (&edge.observer_id, &edge.target_id)
+                        {
+                            self.fetch_shared_scenes(obs_id, tgt_id).await
+                        } else {
+                            vec![]
+                        }
+                    },
+                );
 
                 texts.push(perspective_composite(
                     observer_name,
@@ -550,12 +561,13 @@ impl BackfillService {
 
         info!("Backfilling facets for {} characters", characters.len());
 
-        // Bulk pre-fetch all data needed for facet composites
-        let all_relationships = self.get_all_character_relationships().await?;
-        // Note: outbound perceptions not used for facets (only in general composite)
-        let all_perceptions_in = self.get_all_character_inbound_perceptions().await?; // inbound (NEW)
-        let all_scene_participation = self.get_all_character_scenes().await?;
-        let all_knowledge = self.get_all_character_knowledge().await?;
+        // Bulk pre-fetch all data needed for facet composites in parallel
+        let (all_relationships, all_perceptions_in, all_scene_participation, all_knowledge) = tokio::try_join!(
+            self.get_all_character_relationships(),
+            self.get_all_character_inbound_perceptions(),
+            self.get_all_character_scenes(),
+            self.get_all_character_knowledge(),
+        )?;
 
         // Process characters in chunks of 50
         for chunk in characters.chunks(50) {
@@ -889,6 +901,44 @@ impl BackfillService {
             );
 
             self.embed_and_update_single(&entity_id, &composite, "relationship", stats)
+                .await?;
+        }
+
+        Ok(())
+    }
+
+    /// Backfill note embeddings.
+    async fn backfill_notes(&self, stats: &mut BackfillStats) -> Result<(), NarraError> {
+        let query = "SELECT * FROM note WHERE embedding IS NONE OR embedding_stale = true";
+        let mut response = self.db.query(query).await?;
+        let notes: Vec<Note> = response.take(0)?;
+
+        stats.total_entities += notes.len();
+
+        for chunk in notes.chunks(50) {
+            let ids: Vec<String> = chunk.iter().map(|n| n.id.to_string()).collect();
+            let texts: Vec<String> = chunk.iter().map(note_composite).collect();
+
+            self.embed_and_update_batch(&ids, &texts, "note", stats)
+                .await?;
+        }
+
+        Ok(())
+    }
+
+    /// Backfill universe fact embeddings.
+    async fn backfill_facts(&self, stats: &mut BackfillStats) -> Result<(), NarraError> {
+        let query = "SELECT * FROM fact WHERE embedding IS NONE OR embedding_stale = true";
+        let mut response = self.db.query(query).await?;
+        let facts: Vec<UniverseFact> = response.take(0)?;
+
+        stats.total_entities += facts.len();
+
+        for chunk in facts.chunks(50) {
+            let ids: Vec<String> = chunk.iter().map(|f| f.id.to_string()).collect();
+            let texts: Vec<String> = chunk.iter().map(fact_composite).collect();
+
+            self.embed_and_update_batch(&ids, &texts, "fact", stats)
                 .await?;
         }
 

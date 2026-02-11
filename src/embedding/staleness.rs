@@ -12,11 +12,11 @@ use tokio::time::Instant;
 use tracing::{error, info, warn};
 
 use crate::embedding::composite::{
-    character_composite, event_composite, knowledge_composite, location_composite,
-    perspective_composite, relationship_composite, scene_composite,
+    character_composite, event_composite, fact_composite, knowledge_composite, location_composite,
+    note_composite, perspective_composite, relationship_composite, scene_composite,
 };
 use crate::embedding::EmbeddingService;
-use crate::models::{Character, Event, Location, Scene};
+use crate::models::{Character, Event, Location, Note, Scene, UniverseFact};
 use crate::utils::math::cosine_similarity;
 use crate::NarraError;
 
@@ -407,21 +407,38 @@ async fn regenerate_facet_embedding_internal(
         "identity" => identity_composite(&character),
         "psychology" => psychology_composite(&character),
         "social" => {
-            // Fetch relationships (outbound)
-            let mut rel_result = db
-                .query(
-                    "SELECT ->relates_to.rel_type AS rel_type, ->relates_to->character.name AS target_name \
-                     FROM ONLY $ref",
-                )
-                .bind(("ref", entity_ref.clone()))
-                .await
-                .map_err(|e| NarraError::Database(format!("Failed to fetch relationships: {}", e)))?;
-
+            // Fetch relationships and perceptions in parallel
             #[derive(serde::Deserialize)]
             struct RelResult {
                 rel_type: Option<Vec<String>>,
                 target_name: Option<Vec<String>>,
             }
+
+            #[derive(serde::Deserialize)]
+            struct PerceptionRecord {
+                observer_name: Option<String>,
+                perception: Option<String>,
+            }
+
+            let (mut rel_result, mut perc_result) = tokio::try_join!(
+                async {
+                    db.query(
+                        "SELECT ->relates_to.rel_type AS rel_type, ->relates_to->character.name AS target_name \
+                         FROM ONLY $ref",
+                    )
+                    .bind(("ref", entity_ref.clone()))
+                    .await
+                    .map_err(|e| NarraError::Database(format!("Failed to fetch relationships: {}", e)))
+                },
+                async {
+                    db.query(
+                        "SELECT in.name AS observer_name, perception FROM perceives WHERE out = $ref",
+                    )
+                    .bind(("ref", entity_ref.clone()))
+                    .await
+                    .map_err(|e| NarraError::Database(format!("Failed to fetch perceptions: {}", e)))
+                },
+            )?;
 
             let rel_data: Option<RelResult> = rel_result.take(0).unwrap_or(None);
             let relationships: Vec<(String, String)> = if let Some(data) = rel_data {
@@ -434,21 +451,6 @@ async fn regenerate_facet_embedding_internal(
                 vec![]
             };
 
-            // Fetch inbound perceptions (how others see this character)
-            #[derive(serde::Deserialize)]
-            struct PerceptionRecord {
-                observer_name: Option<String>,
-                perception: Option<String>,
-            }
-
-            let mut perc_result = db
-                .query(
-                    "SELECT in.name AS observer_name, perception FROM perceives WHERE out = $ref",
-                )
-                .bind(("ref", entity_ref.clone()))
-                .await
-                .map_err(|e| NarraError::Database(format!("Failed to fetch perceptions: {}", e)))?;
-
             let perc_records: Vec<PerceptionRecord> = perc_result.take(0).unwrap_or_default();
             let perceptions_of: Vec<(String, String)> = perc_records
                 .into_iter()
@@ -458,43 +460,45 @@ async fn regenerate_facet_embedding_internal(
             social_composite(&character, &relationships, &perceptions_of)
         }
         "narrative" => {
-            // Fetch scene participation
+            // Fetch scenes and knowledge in parallel
             #[derive(serde::Deserialize)]
             struct SceneRecord {
                 scene_title: Option<String>,
                 scene_summary: Option<String>,
             }
 
-            let mut scene_result = db
-                .query(
-                    "SELECT out.title AS scene_title, out.summary AS scene_summary \
-                     FROM participates_in WHERE in = $ref",
-                )
-                .bind(("ref", entity_ref.clone()))
-                .await
-                .map_err(|e| NarraError::Database(format!("Failed to fetch scenes: {}", e)))?;
-
-            let scene_records: Vec<SceneRecord> = scene_result.take(0).unwrap_or_default();
-            let scenes: Vec<(String, Option<String>)> = scene_records
-                .into_iter()
-                .filter_map(|s| Some((s.scene_title?, s.scene_summary)))
-                .collect();
-
-            // Fetch knowledge held by character
             #[derive(serde::Deserialize)]
             struct KnowledgeRecord {
                 fact: Option<String>,
                 certainty: Option<String>,
             }
 
-            let mut knowledge_result = db
-                .query(
-                    "SELECT out.fact AS fact, certainty FROM knows WHERE in = $ref \
-                     ORDER BY learned_at DESC LIMIT 20",
-                )
-                .bind(("ref", entity_ref.clone()))
-                .await
-                .map_err(|e| NarraError::Database(format!("Failed to fetch knowledge: {}", e)))?;
+            let (mut scene_result, mut knowledge_result) = tokio::try_join!(
+                async {
+                    db.query(
+                        "SELECT out.title AS scene_title, out.summary AS scene_summary \
+                         FROM participates_in WHERE in = $ref",
+                    )
+                    .bind(("ref", entity_ref.clone()))
+                    .await
+                    .map_err(|e| NarraError::Database(format!("Failed to fetch scenes: {}", e)))
+                },
+                async {
+                    db.query(
+                        "SELECT out.fact AS fact, certainty FROM knows WHERE in = $ref \
+                         ORDER BY learned_at DESC LIMIT 20",
+                    )
+                    .bind(("ref", entity_ref.clone()))
+                    .await
+                    .map_err(|e| NarraError::Database(format!("Failed to fetch knowledge: {}", e)))
+                },
+            )?;
+
+            let scene_records: Vec<SceneRecord> = scene_result.take(0).unwrap_or_default();
+            let scenes: Vec<(String, Option<String>)> = scene_records
+                .into_iter()
+                .filter_map(|s| Some((s.scene_title?, s.scene_summary)))
+                .collect();
 
             let knowledge_records: Vec<KnowledgeRecord> =
                 knowledge_result.take(0).unwrap_or_default();
@@ -673,19 +677,38 @@ async fn regenerate_embedding_internal(
                 NarraError::Database(format!("Character not found: {}", entity_id))
             })?;
 
-            // Fetch relationships separately
-            let mut rel_result = db
-                .query("SELECT ->relates_to->character.{name, relationship_type} AS relationships FROM ONLY $ref")
-                .bind(("ref", entity_ref.clone()))
-                .await
-                .map_err(|e| {
-                    NarraError::Database(format!("Failed to fetch relationships: {}", e))
-                })?;
-
+            // Fetch relationships and perceptions in parallel
             #[derive(serde::Deserialize)]
             struct RelResult {
                 relationships: Option<Vec<serde_json::Value>>,
             }
+
+            #[derive(serde::Deserialize)]
+            struct PerceptionRecord {
+                target_name: Option<String>,
+                perception: Option<String>,
+            }
+
+            let (mut rel_result, mut perc_result) = tokio::try_join!(
+                async {
+                    db.query("SELECT ->relates_to->character.{name, relationship_type} AS relationships FROM ONLY $ref")
+                        .bind(("ref", entity_ref.clone()))
+                        .await
+                        .map_err(|e| {
+                            NarraError::Database(format!("Failed to fetch relationships: {}", e))
+                        })
+                },
+                async {
+                    db.query(
+                        "SELECT out.name AS target_name, perception FROM perceives WHERE in = $ref",
+                    )
+                    .bind(("ref", entity_ref.clone()))
+                    .await
+                    .map_err(|e| {
+                        NarraError::Database(format!("Failed to fetch perceptions: {}", e))
+                    })
+                },
+            )?;
 
             let rel_data: Option<RelResult> = rel_result.take(0).unwrap_or(None);
             let relationships: Vec<(String, String)> = rel_data
@@ -698,19 +721,6 @@ async fn regenerate_embedding_internal(
                     Some((rel_type.to_string(), name.to_string()))
                 })
                 .collect();
-
-            // Fetch perceptions (how this character sees others)
-            #[derive(serde::Deserialize)]
-            struct PerceptionRecord {
-                target_name: Option<String>,
-                perception: Option<String>,
-            }
-
-            let mut perc_result = db
-                .query("SELECT out.name AS target_name, perception FROM perceives WHERE in = $ref")
-                .bind(("ref", entity_ref.clone()))
-                .await
-                .map_err(|e| NarraError::Database(format!("Failed to fetch perceptions: {}", e)))?;
 
             let perc_records: Vec<PerceptionRecord> = perc_result.take(0).unwrap_or_default();
             let perceptions: Vec<(String, String)> = perc_records
@@ -962,6 +972,38 @@ async fn regenerate_embedding_internal(
                 &knowledge,
                 &shared_scenes,
             )
+        }
+        "note" => {
+            let mut result = db
+                .query("SELECT * FROM ONLY $ref")
+                .bind(("ref", entity_ref.clone()))
+                .await
+                .map_err(|e| NarraError::Database(format!("Failed to fetch note: {}", e)))?;
+
+            let note: Option<Note> = result
+                .take(0)
+                .map_err(|e| NarraError::Database(format!("Failed to parse note: {}", e)))?;
+
+            let note =
+                note.ok_or_else(|| NarraError::Database(format!("Note not found: {}", entity_id)))?;
+
+            note_composite(&note)
+        }
+        "fact" => {
+            let mut result = db
+                .query("SELECT * FROM ONLY $ref")
+                .bind(("ref", entity_ref.clone()))
+                .await
+                .map_err(|e| NarraError::Database(format!("Failed to fetch fact: {}", e)))?;
+
+            let fact: Option<UniverseFact> = result
+                .take(0)
+                .map_err(|e| NarraError::Database(format!("Failed to parse fact: {}", e)))?;
+
+            let fact =
+                fact.ok_or_else(|| NarraError::Database(format!("Fact not found: {}", entity_id)))?;
+
+            fact_composite(&fact)
         }
         _ => {
             return Err(NarraError::Database(format!(

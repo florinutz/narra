@@ -185,9 +185,17 @@ async fn dispatch_get(
             }
             Ok(())
         }
+        "phase" => {
+            let phase = crate::models::phase::get_phase(&ctx.db, key).await?;
+            match phase {
+                Some(p) => output_json(&p),
+                None => print_error(&format!("Phase '{}' not found", key)),
+            }
+            Ok(())
+        }
         other => {
             anyhow::bail!(
-                "Unsupported entity type '{}'. Supported: character, location, event, scene, universe_fact, note",
+                "Unsupported entity type '{}'. Supported: character, location, event, scene, universe_fact, note, phase",
                 other
             );
         }
@@ -209,6 +217,7 @@ fn normalize_type(s: &str) -> String {
         "relationship" | "relationships" => "relationship".to_string(),
         "fact" | "facts" => "fact".to_string(),
         "note" | "notes" => "note".to_string(),
+        "phase" | "phases" => "phase".to_string(),
         _ => s.to_string(),
     }
 }
@@ -249,9 +258,10 @@ pub async fn handle_list(
             .await
         }
         "note" => crate::cli::handlers::note::list_notes(ctx, entity_filter, mode).await,
+        "phase" => list_phases(ctx, mode).await,
         other => {
             anyhow::bail!(
-                "Unknown entity type '{}'. Valid types: character, location, event, scene, knowledge, relationship, fact, note (limit: {})",
+                "Unknown entity type '{}'. Valid types: character, location, event, scene, knowledge, relationship, fact, note, phase (limit: {})",
                 other,
                 limit
             );
@@ -532,6 +542,50 @@ pub async fn list_scenes(ctx: &AppContext, mode: OutputMode) -> Result<()> {
         .collect();
 
     print_table(&["ID", "Title", "Event", "Location"], rows);
+    Ok(())
+}
+
+// =============================================================================
+// Phases
+// =============================================================================
+
+async fn list_phases(ctx: &AppContext, mode: OutputMode) -> Result<()> {
+    let phases = crate::models::phase::list_phases(&ctx.db).await?;
+
+    if mode == OutputMode::Json {
+        output_json_list(&phases);
+        return Ok(());
+    }
+
+    if phases.is_empty() {
+        println!(
+            "No saved phases. Run 'narra analyze phases --save' to detect and persist phases."
+        );
+        return Ok(());
+    }
+
+    let rows: Vec<Vec<String>> = phases
+        .iter()
+        .map(|p| {
+            let seq_range = match (p.sequence_range_min, p.sequence_range_max) {
+                (Some(min), Some(max)) => format!("{}-{}", min, max),
+                _ => "-".to_string(),
+            };
+            vec![
+                p.phase_order.to_string(),
+                p.id.to_string(),
+                p.name.clone(),
+                p.label.clone(),
+                p.member_count.to_string(),
+                seq_range,
+            ]
+        })
+        .collect();
+
+    print_table(
+        &["Order", "ID", "Name", "Label", "Members", "Seq Range"],
+        rows,
+    );
     Ok(())
 }
 

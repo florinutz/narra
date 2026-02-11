@@ -17,7 +17,7 @@ use std::sync::Arc;
 use common::{harness::TestHarness, to_mutation_input, to_query_input};
 use narra::embedding::composite::relationship_composite;
 use narra::embedding::NoopEmbeddingService;
-use narra::mcp::{MutationRequest, NarraServer, QueryRequest};
+use narra::mcp::{MutationRequest, NarraServer, QueryRequest, SearchMetadataFilter};
 use narra::session::SessionStateManager;
 use rmcp::handler::server::wrapper::Parameters;
 
@@ -610,18 +610,23 @@ async fn test_similar_relationships_finds_matches() {
 // FILTERED SEARCH TESTS (with metadata filter parsing)
 // =============================================================================
 
-/// Test SemanticSearch with filter field (noop embedding service — just verify it doesn't crash).
+/// Test UnifiedSearch (semantic mode) with filter field (noop embedding service — just verify it doesn't crash).
 #[tokio::test]
 async fn test_semantic_search_with_filter_rejects_noop() {
     let harness = TestHarness::new().await;
     let server = create_test_server(&harness).await;
 
     let result = server
-        .handle_query(Parameters(to_query_input(QueryRequest::SemanticSearch {
+        .handle_query(Parameters(to_query_input(QueryRequest::UnifiedSearch {
             query: "betrayal".to_string(),
+            mode: "semantic".to_string(),
             entity_types: Some(vec!["character".to_string()]),
             limit: Some(10),
-            filter: Some(serde_json::json!({"roles": "antagonist"})),
+            phase: None,
+            filter: Some(SearchMetadataFilter {
+                roles: Some("antagonist".to_string()),
+                ..Default::default()
+            }),
         })))
         .await;
 
@@ -629,7 +634,7 @@ async fn test_semantic_search_with_filter_rejects_noop() {
     assert!(result.is_err(), "Should fail with noop embedding service");
 }
 
-/// Test HybridSearch with filter field (noop embedding — returns keyword-only results).
+/// Test UnifiedSearch (hybrid mode) with filter field (noop embedding — returns keyword-only results).
 #[tokio::test]
 async fn test_hybrid_search_with_filter_graceful_fallback() {
     let harness = TestHarness::new().await;
@@ -643,15 +648,20 @@ async fn test_hybrid_search_with_filter_graceful_fallback() {
         .unwrap();
 
     let result = server
-        .handle_query(Parameters(to_query_input(QueryRequest::HybridSearch {
+        .handle_query(Parameters(to_query_input(QueryRequest::UnifiedSearch {
             query: "Alice".to_string(),
+            mode: "hybrid".to_string(),
             entity_types: Some(vec!["character".to_string()]),
             limit: Some(10),
-            filter: Some(serde_json::json!({"roles": "warrior"})),
+            phase: None,
+            filter: Some(SearchMetadataFilter {
+                roles: Some("warrior".to_string()),
+                ..Default::default()
+            }),
         })))
         .await;
 
-    // HybridSearch should fall back to keyword search when embeddings unavailable
+    // Hybrid mode should fall back to keyword search when embeddings unavailable
     assert!(
         result.is_ok(),
         "Should fall back gracefully: {:?}",
@@ -659,9 +669,9 @@ async fn test_hybrid_search_with_filter_graceful_fallback() {
     );
 }
 
-/// Test that unknown filter fields are silently ignored.
+/// Test that an empty (default) filter is silently ignored.
 #[tokio::test]
-async fn test_filter_unknown_fields_ignored() {
+async fn test_filter_empty_fields_ignored() {
     let harness = TestHarness::new().await;
     let server = create_test_server(&harness).await;
 
@@ -671,19 +681,78 @@ async fn test_filter_unknown_fields_ignored() {
         .await
         .unwrap();
 
-    // Filter with unknown field should not crash
+    // Filter with no matching fields — all None fields produce empty filter list
     let result = server
-        .handle_query(Parameters(to_query_input(QueryRequest::HybridSearch {
+        .handle_query(Parameters(to_query_input(QueryRequest::UnifiedSearch {
             query: "Alice".to_string(),
+            mode: "hybrid".to_string(),
             entity_types: Some(vec!["character".to_string()]),
             limit: Some(10),
-            filter: Some(serde_json::json!({"nonexistent_field": "value", "also_unknown": 42})),
+            phase: None,
+            filter: Some(SearchMetadataFilter::default()),
         })))
         .await;
 
     assert!(
         result.is_ok(),
-        "Unknown filter fields should be silently ignored: {:?}",
+        "Empty filter should be silently ignored: {:?}",
         result.err()
     );
+}
+
+// =============================================================================
+// RERANKED SEARCH FALLBACK
+// =============================================================================
+
+/// Test UnifiedSearch with mode="reranked" and NoopEmbeddingService returns error
+/// or degrades gracefully (since reranking requires semantic search first).
+#[tokio::test]
+async fn test_unified_search_reranked_fallback() {
+    let harness = TestHarness::new().await;
+    let server = create_test_server(&harness).await;
+
+    // Create a character so there's data to search
+    harness
+        .db
+        .query("CREATE character:alice SET name = 'Alice', roles = ['warrior'], aliases = []")
+        .await
+        .unwrap();
+
+    let result = server
+        .handle_query(Parameters(to_query_input(QueryRequest::UnifiedSearch {
+            query: "Alice".to_string(),
+            mode: "reranked".to_string(),
+            entity_types: Some(vec!["character".to_string()]),
+            limit: Some(10),
+            phase: None,
+            filter: None,
+        })))
+        .await;
+
+    // Reranked mode requires embeddings for the initial hybrid search.
+    // With NoopEmbeddingService, it should either:
+    // (a) fail with an error about embeddings, or
+    // (b) degrade gracefully to keyword-only results (hybrid fallback, reranking skipped)
+    match result {
+        Ok(response) => {
+            // Graceful degradation — the handler ran without error.
+            // Hints should reference the search mode (re-ranked, hybrid, semantic, etc.)
+            assert!(
+                !response.hints.is_empty(),
+                "Degraded response should have hints"
+            );
+            // Verify we didn't silently return garbage — either results or empty is fine
+            // The key property is: no panic, no error, sensible output
+        }
+        Err(e) => {
+            // Expected error about embedding service
+            assert!(
+                e.to_lowercase().contains("embed")
+                    || e.to_lowercase().contains("semantic")
+                    || e.to_lowercase().contains("rerank"),
+                "Error should mention embedding/semantic/rerank: {}",
+                e
+            );
+        }
+    }
 }

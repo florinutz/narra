@@ -36,6 +36,13 @@ impl NarraServer {
 
         let entity_id = fact.id.to_string();
 
+        // Trigger embedding generation for the new fact
+        if let Err(e) = self.staleness_manager.mark_stale(&entity_id).await {
+            tracing::warn!("Failed to mark fact embedding stale: {}", e);
+        }
+        self.staleness_manager
+            .spawn_regeneration(entity_id.clone(), "fact".to_string(), None);
+
         let result = EntityResult {
             id: entity_id.clone(),
             entity_type: "universe_fact".to_string(),
@@ -92,6 +99,13 @@ impl NarraServer {
             .ok_or_else(|| format!("Fact not found: {}", fact_id))?;
 
         let entity_id = fact.id.to_string();
+
+        // Trigger embedding regeneration
+        if let Err(e) = self.staleness_manager.mark_stale(&entity_id).await {
+            tracing::warn!("Failed to mark fact embedding stale: {}", e);
+        }
+        self.staleness_manager
+            .spawn_regeneration(entity_id.clone(), "fact".to_string(), None);
 
         let result = EntityResult {
             id: entity_id.clone(),

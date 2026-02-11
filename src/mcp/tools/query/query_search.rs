@@ -1,58 +1,32 @@
 use crate::mcp::NarraServer;
-use crate::mcp::{EntityResult, QueryResponse};
+use crate::mcp::{EntityResult, QueryResponse, SearchMetadataFilter};
 use crate::repository::RelationshipRepository;
 use crate::services::{EntityType, SearchFilter};
 use crate::utils::math::cosine_similarity;
 
-use super::parse_metadata_filter;
+use super::{parse_entity_types, parse_metadata_filter};
 
 impl NarraServer {
-    pub(crate) async fn handle_semantic_search(
+    /// Unified search handler supporting semantic, hybrid, and reranked modes.
+    pub(crate) async fn handle_unified_search(
         &self,
         query: &str,
+        mode: &str,
         entity_types: Option<Vec<String>>,
         limit: usize,
-        metadata_filter: Option<serde_json::Value>,
+        metadata_filter: Option<SearchMetadataFilter>,
+        phase: Option<usize>,
     ) -> Result<QueryResponse, String> {
-        // Check if embedding service is available
-        if !self.embedding_service.is_available() {
-            return Err("Semantic search unavailable - embedding model not loaded. Use regular search instead.".to_string());
-        }
+        // 1. Parse entity types (shared)
+        let type_filter = parse_entity_types(entity_types);
 
-        // Convert entity_types strings to EntityType enum, filtering to only embeddable types
-        let type_filter = if let Some(types) = entity_types {
-            let mut embeddable_types = Vec::new();
-            let mut non_embeddable = Vec::new();
-
-            for t in types {
-                match t.to_lowercase().as_str() {
-                    "character" => embeddable_types.push(EntityType::Character),
-                    "location" => embeddable_types.push(EntityType::Location),
-                    "event" => embeddable_types.push(EntityType::Event),
-                    "scene" => embeddable_types.push(EntityType::Scene),
-                    "knowledge" => embeddable_types.push(EntityType::Knowledge),
-                    "note" => non_embeddable.push("note"),
-                    _ => {}
-                }
-            }
-
-            // If user requested non-embeddable types, we'll add a hint later
-            if !non_embeddable.is_empty() {
-                tracing::debug!("Filtered out non-embeddable types: {:?}", non_embeddable);
-            }
-
-            embeddable_types
-        } else {
-            vec![]
-        };
-
-        // Parse metadata filters
+        // 2. Parse metadata filters (shared)
         let metadata = metadata_filter
             .as_ref()
             .map(parse_metadata_filter)
             .unwrap_or_default();
 
-        // Build SearchFilter with entity_types, limit, and metadata
+        // 3. Build SearchFilter (shared)
         let filter = SearchFilter {
             entity_types: type_filter,
             limit: Some(limit),
@@ -60,137 +34,201 @@ impl NarraServer {
             metadata,
         };
 
-        // Call semantic_search
-        let results = self
-            .search_service
-            .semantic_search(query, filter)
-            .await
-            .map_err(|e| format!("Semantic search failed: {}", e))?;
+        // 4. Dispatch by mode
+        let mut response: QueryResponse = (match mode {
+            "semantic" => {
+                if !self.embedding_service.is_available() {
+                    return Err("Semantic search unavailable - embedding model not loaded. Use mode 'hybrid' instead.".to_string());
+                }
 
-        // Convert SearchResults to EntityResults
-        let entity_results: Vec<EntityResult> = results
-            .iter()
-            .map(|r| EntityResult {
-                id: r.id.clone(),
-                entity_type: r.entity_type.clone(),
-                name: r.name.clone(),
-                content: r.name.clone(), // SearchResult doesn't have snippet, use name
-                confidence: Some(r.score),
-                last_modified: None,
-            })
-            .collect();
+                let results = self
+                    .search_service
+                    .semantic_search(query, filter)
+                    .await
+                    .map_err(|e| format!("Semantic search failed: {}", e))?;
 
-        let mut hints = Vec::new();
-        if entity_results.is_empty() {
-            hints.push("No semantic matches found. Try broader terms or run backfill_embeddings if entities lack embeddings.".to_string());
-        } else {
-            hints.push(format!(
-                "Found {} semantically similar entities",
-                entity_results.len()
-            ));
-            hints.push("Use lookup for full details on any entity".to_string());
-        }
+                // Auto-rerank results using cross-encoder for better relevance
+                let results = self
+                    .search_service
+                    .rerank_results(query, results)
+                    .await
+                    .map_err(|e| format!("Re-ranking failed: {}", e))?;
 
-        let token_estimate = self.estimate_tokens_from_results(&entity_results);
+                let entity_results: Vec<EntityResult> = results
+                    .iter()
+                    .map(|r| EntityResult {
+                        id: r.id.clone(),
+                        entity_type: r.entity_type.clone(),
+                        name: r.name.clone(),
+                        content: r.name.clone(),
+                        confidence: Some(r.score),
+                        last_modified: None,
+                    })
+                    .collect();
 
-        Ok(QueryResponse {
-            results: entity_results,
-            total: results.len(),
-            next_cursor: None,
-            hints,
-            token_estimate,
-        })
-    }
+                let mut hints = Vec::new();
+                if entity_results.is_empty() {
+                    hints.push("No semantic matches found. Try broader terms or run backfill_embeddings if entities lack embeddings.".to_string());
+                } else {
+                    hints.push(format!(
+                        "Found {} semantically similar entities",
+                        entity_results.len()
+                    ));
+                    hints.push("Use lookup for full details on any entity".to_string());
+                }
 
-    pub(crate) async fn handle_hybrid_search(
-        &self,
-        query: &str,
-        entity_types: Option<Vec<String>>,
-        limit: usize,
-        metadata_filter: Option<serde_json::Value>,
-    ) -> Result<QueryResponse, String> {
-        // Convert entity_types strings to EntityType enum, filtering to only embeddable types
-        let type_filter = if let Some(types) = entity_types {
-            let mut embeddable_types = Vec::new();
+                let token_estimate = self.estimate_tokens_from_results(&entity_results);
 
-            for t in types {
-                match t.to_lowercase().as_str() {
-                    "character" => embeddable_types.push(EntityType::Character),
-                    "location" => embeddable_types.push(EntityType::Location),
-                    "event" => embeddable_types.push(EntityType::Event),
-                    "scene" => embeddable_types.push(EntityType::Scene),
-                    "knowledge" => embeddable_types.push(EntityType::Knowledge),
-                    _ => {}
+                Ok(QueryResponse {
+                    results: entity_results,
+                    total: results.len(),
+                    next_cursor: None,
+                    hints,
+                    token_estimate,
+                    truncated: None,
+                })
+            }
+            "reranked" => {
+                let results = self
+                    .search_service
+                    .reranked_search(query, filter)
+                    .await
+                    .map_err(|e| format!("Re-ranked search failed: {}", e))?;
+
+                let entity_results: Vec<EntityResult> = results
+                    .iter()
+                    .map(|r| EntityResult {
+                        id: r.id.clone(),
+                        entity_type: r.entity_type.clone(),
+                        name: r.name.clone(),
+                        content: format!("[{}] {} (score: {:.4})", r.entity_type, r.name, r.score),
+                        confidence: Some(r.score),
+                        last_modified: None,
+                    })
+                    .collect();
+
+                let total = entity_results.len();
+                let token_estimate = self.estimate_tokens_from_results(&entity_results);
+
+                Ok(QueryResponse {
+                    results: entity_results,
+                    total,
+                    next_cursor: None,
+                    hints: vec![
+                        "Re-ranked results use cross-encoder scoring for better relevance"
+                            .to_string(),
+                    ],
+                    token_estimate,
+                    truncated: None,
+                })
+            }
+            _ => {
+                // "hybrid" (default)
+                let results = self
+                    .search_service
+                    .hybrid_search(query, filter)
+                    .await
+                    .map_err(|e| format!("Hybrid search failed: {}", e))?;
+
+                let entity_results: Vec<EntityResult> = results
+                    .iter()
+                    .map(|r| EntityResult {
+                        id: r.id.clone(),
+                        entity_type: r.entity_type.clone(),
+                        name: r.name.clone(),
+                        content: r.name.clone(),
+                        confidence: Some(r.score),
+                        last_modified: None,
+                    })
+                    .collect();
+
+                let mut hints = Vec::new();
+
+                if !self.embedding_service.is_available() {
+                    hints.push(
+                        "Semantic component unavailable - showing keyword results only".to_string(),
+                    );
+                } else {
+                    hints.push(
+                        "Results combine keyword matching with semantic similarity".to_string(),
+                    );
+                }
+
+                if entity_results.is_empty() {
+                    hints.push(
+                        "No matches found. Try a different query or broader terms.".to_string(),
+                    );
+                } else {
+                    hints.push(format!(
+                        "Found {} results from hybrid search",
+                        entity_results.len()
+                    ));
+                    hints.push("Use lookup for full details on any entity".to_string());
+                }
+
+                let token_estimate = self.estimate_tokens_from_results(&entity_results);
+
+                Ok(QueryResponse {
+                    results: entity_results,
+                    total: results.len(),
+                    next_cursor: None,
+                    hints,
+                    token_estimate,
+                    truncated: None,
+                })
+            }
+        } as Result<QueryResponse, String>)?;
+
+        // Apply phase filtering if requested
+        if let Some(phase_id) = phase {
+            use crate::services::TemporalService;
+
+            let temporal_service = TemporalService::new(self.db.clone());
+            match temporal_service
+                .load_or_detect_phases(EntityType::embeddable(), None, None)
+                .await
+            {
+                Ok(phase_result) => {
+                    if let Some(target_phase) =
+                        phase_result.phases.iter().find(|p| p.phase_id == phase_id)
+                    {
+                        let phase_entity_ids: std::collections::HashSet<String> = target_phase
+                            .members
+                            .iter()
+                            .map(|m| m.entity_id.clone())
+                            .collect();
+
+                        response
+                            .results
+                            .retain(|r| phase_entity_ids.contains(&r.id));
+                        response.total = response.results.len();
+                        response.hints.push(format!(
+                            "Filtered to phase {}: {}",
+                            phase_id, target_phase.label
+                        ));
+                    } else {
+                        let available: Vec<String> = phase_result
+                            .phases
+                            .iter()
+                            .map(|p| format!("{}: {}", p.phase_id, p.label))
+                            .collect();
+                        response.hints.push(format!(
+                            "Phase {} not found. Available: {}",
+                            phase_id,
+                            available.join(", ")
+                        ));
+                    }
+                }
+                Err(e) => {
+                    response.hints.push(format!(
+                        "Phase filtering skipped (phase detection failed: {})",
+                        e
+                    ));
                 }
             }
-
-            embeddable_types
-        } else {
-            vec![]
-        };
-
-        // Parse metadata filters
-        let metadata = metadata_filter
-            .as_ref()
-            .map(parse_metadata_filter)
-            .unwrap_or_default();
-
-        // Build SearchFilter with entity_types, limit, and metadata
-        let filter = SearchFilter {
-            entity_types: type_filter,
-            limit: Some(limit),
-            min_score: None,
-            metadata,
-        };
-
-        // Call hybrid_search (already handles graceful degradation)
-        let results = self
-            .search_service
-            .hybrid_search(query, filter)
-            .await
-            .map_err(|e| format!("Hybrid search failed: {}", e))?;
-
-        // Convert SearchResults to EntityResults
-        let entity_results: Vec<EntityResult> = results
-            .iter()
-            .map(|r| EntityResult {
-                id: r.id.clone(),
-                entity_type: r.entity_type.clone(),
-                name: r.name.clone(),
-                content: r.name.clone(), // SearchResult doesn't have snippet, use name
-                confidence: Some(r.score),
-                last_modified: None,
-            })
-            .collect();
-
-        let mut hints = Vec::new();
-
-        // Check if embedding service is available for better hints
-        if !self.embedding_service.is_available() {
-            hints.push("Semantic component unavailable - showing keyword results only".to_string());
-        } else {
-            hints.push("Results combine keyword matching with semantic similarity".to_string());
         }
 
-        if entity_results.is_empty() {
-            hints.push("No matches found. Try a different query or broader terms.".to_string());
-        } else {
-            hints.push(format!(
-                "Found {} results from hybrid search",
-                entity_results.len()
-            ));
-            hints.push("Use lookup for full details on any entity".to_string());
-        }
-
-        let token_estimate = self.estimate_tokens_from_results(&entity_results);
-
-        Ok(QueryResponse {
-            results: entity_results,
-            total: results.len(),
-            next_cursor: None,
-            hints,
-            token_estimate,
-        })
+        Ok(response)
     }
 
     pub(crate) async fn handle_reverse_query(
@@ -210,28 +248,41 @@ impl NarraServer {
             .await
             .map_err(|e| format!("Reverse query failed: {}", e))?;
 
-        // Convert to EntityResults, fetch details for each
-        let mut entity_results = Vec::new();
-        for result in &results {
-            // Use existing summary service to get entity details
-            let summary = self
-                .summary_service
-                .get_entity_content(
-                    &result.entity_id,
-                    crate::services::summary::DetailLevel::Minimal,
-                )
-                .await
-                .map_err(|e| format!("Failed to fetch entity: {}", e))?;
+        // Convert to EntityResults, fetch details in parallel
+        let futures: Vec<_> = results
+            .iter()
+            .map(|result| {
+                let summary_service = self.summary_service.clone();
+                let entity_id_str = result.entity_id.clone();
+                let entity_type = result.entity_type.clone();
+                let reference_field = result.reference_field.clone();
+                let target_entity_id = entity_id.to_string();
+                async move {
+                    let summary = summary_service
+                        .get_entity_content(
+                            &entity_id_str,
+                            crate::services::summary::DetailLevel::Minimal,
+                        )
+                        .await
+                        .map_err(|e| format!("Failed to fetch entity: {}", e))?;
 
-            if let Some(summary) = summary {
-                entity_results.push(EntityResult {
-                    id: result.entity_id.clone(),
-                    entity_type: result.entity_type.clone(),
-                    name: summary.name.clone(),
-                    content: format!("References {} via {}", entity_id, result.reference_field),
-                    confidence: Some(1.0),
-                    last_modified: None,
-                });
+                    Ok::<_, String>(summary.map(|s| EntityResult {
+                        id: entity_id_str,
+                        entity_type,
+                        name: s.name.clone(),
+                        content: format!("References {} via {}", target_entity_id, reference_field),
+                        confidence: Some(1.0),
+                        last_modified: None,
+                    }))
+                }
+            })
+            .collect();
+
+        let summaries = futures::future::join_all(futures).await;
+        let mut entity_results = Vec::new();
+        for result in summaries {
+            if let Ok(Some(entity_result)) = result {
+                entity_results.push(entity_result);
             }
         }
 
@@ -252,6 +303,7 @@ impl NarraServer {
             next_cursor: None,
             hints,
             token_estimate,
+            truncated: None,
         })
     }
 
@@ -266,22 +318,14 @@ impl NarraServer {
             return Err("Semantic join unavailable - embedding model not loaded. Run backfill_embeddings first.".to_string());
         }
 
-        // Convert entity_types strings to EntityType enum, filtering to only embeddable types
-        let type_filter = if let Some(types) = entity_types {
-            types
-                .iter()
-                .filter_map(|t| match t.to_lowercase().as_str() {
-                    "character" => Some(EntityType::Character),
-                    "location" => Some(EntityType::Location),
-                    "event" => Some(EntityType::Event),
-                    "scene" => Some(EntityType::Scene),
-                    "knowledge" => Some(EntityType::Knowledge),
-                    _ => None,
-                })
-                .collect()
-        } else {
-            // Default to all embeddable types
-            EntityType::embeddable()
+        // Convert entity_types using shared helper, default to all embeddable
+        let type_filter = {
+            let parsed = parse_entity_types(entity_types);
+            if parsed.is_empty() {
+                EntityType::embeddable()
+            } else {
+                parsed
+            }
         };
 
         // Embed the query
@@ -291,55 +335,63 @@ impl NarraServer {
             .await
             .map_err(|e| format!("Failed to embed query: {}", e))?;
 
-        // Perform cross-table vector search via HNSW index
-        let mut all_results = Vec::new();
-
-        for entity_type in &type_filter {
-            let (table, name_field) = match entity_type {
-                EntityType::Character => ("character", "name"),
-                EntityType::Location => ("location", "name"),
-                EntityType::Event => ("event", "title"),
-                EntityType::Scene => ("scene", "title"),
-                EntityType::Knowledge => ("knowledge", "fact"),
-                _ => continue, // Skip non-embeddable types
-            };
-
-            // Query this table for vector matches using brute-force cosine similarity.
-            // HNSW KNN (<|K|>) doesn't work reliably in SurrealDB 2.6.0 embedded RocksDB mode.
-            let k = limit * 2; // Fetch more to allow combining across types
-            let query_str = format!(
-                r#"SELECT id, '{table}' AS entity_type, {name_field} AS name,
-                          vector::similarity::cosine(embedding, $query_vector) AS score
-                   FROM {table}
-                   WHERE embedding IS NOT NONE
-                   ORDER BY score DESC
-                   LIMIT {k}"#,
-                table = table,
-                name_field = name_field,
-                k = k,
-            );
-
-            let mut response = self
-                .db
-                .query(&query_str)
-                .bind(("query_vector", query_vector.clone()))
-                .await
-                .map_err(|e| format!("Semantic join query failed: {}", e))?;
-
-            #[derive(serde::Deserialize)]
-            struct SearchResultInternal {
-                id: surrealdb::sql::Thing,
-                entity_type: String,
-                name: String,
-                score: f32,
-            }
-
-            let table_results: Vec<SearchResultInternal> = response
-                .take(0)
-                .map_err(|e| format!("Failed to parse results: {}", e))?;
-
-            all_results.extend(table_results);
+        // Perform cross-table vector search in parallel via try_join_all
+        #[derive(serde::Deserialize)]
+        struct SearchResultInternal {
+            id: surrealdb::sql::Thing,
+            entity_type: String,
+            name: String,
+            score: f32,
         }
+
+        let k = limit * 2;
+        let futures: Vec<_> = type_filter
+            .iter()
+            .map(|entity_type| {
+                let db = self.db.clone();
+                let qv = query_vector.clone();
+                let (table, name_field) = match entity_type {
+                    EntityType::Character => ("character", "name"),
+                    EntityType::Location => ("location", "name"),
+                    EntityType::Event => ("event", "title"),
+                    EntityType::Scene => ("scene", "title"),
+                    EntityType::Knowledge => ("knowledge", "fact"),
+                    EntityType::Note => ("note", "title"),
+                    EntityType::Fact => ("fact", "title"),
+                };
+                let table = table.to_string();
+                let name_field = name_field.to_string();
+                async move {
+                    let query_str = format!(
+                        r#"SELECT id, '{table}' AS entity_type, {name_field} AS name,
+                                  vector::similarity::cosine(embedding, $query_vector) AS score
+                           FROM {table}
+                           WHERE embedding IS NOT NONE
+                           ORDER BY score DESC
+                           LIMIT {k}"#,
+                        table = table,
+                        name_field = name_field,
+                        k = k,
+                    );
+
+                    let mut response = db
+                        .query(&query_str)
+                        .bind(("query_vector", qv))
+                        .await
+                        .map_err(|e| format!("Semantic join query failed: {}", e))?;
+
+                    let table_results: Vec<SearchResultInternal> = response
+                        .take(0)
+                        .map_err(|e| format!("Failed to parse results: {}", e))?;
+
+                    Ok::<_, String>(table_results)
+                }
+            })
+            .collect();
+
+        let table_results = futures::future::try_join_all(futures).await?;
+        let mut all_results: Vec<SearchResultInternal> =
+            table_results.into_iter().flatten().collect();
 
         // Sort all results by similarity score descending
         all_results.sort_by(|a, b| {
@@ -358,7 +410,7 @@ impl NarraServer {
                 id: r.id.to_string(),
                 entity_type: r.entity_type.clone(),
                 name: r.name.clone(),
-                content: r.name.clone(), // Minimal content for cross-type search
+                content: r.name.clone(),
                 confidence: Some(r.score),
                 last_modified: None,
             })
@@ -378,6 +430,7 @@ impl NarraServer {
             next_cursor: None,
             hints,
             token_estimate,
+            truncated: None,
         })
     }
 
@@ -400,10 +453,7 @@ impl NarraServer {
             .map_err(|e| format!("Failed to embed query: {}", e))?;
 
         // Build SurrealQL with optional character filter.
-        // Uses brute-force cosine similarity — HNSW KNN (<|K|>) doesn't work
-        // reliably in SurrealDB 2.6.0 embedded RocksDB mode.
         let query_str = if let Some(ref char_id) = character_id {
-            // Extract character key
             let char_key = char_id.split(':').nth(1).unwrap_or(char_id);
             format!(
                 r#"SELECT id, 'knowledge' AS entity_type, fact AS name,
@@ -494,6 +544,7 @@ impl NarraServer {
             next_cursor: None,
             hints,
             token_estimate,
+            truncated: None,
         })
     }
 
@@ -532,6 +583,7 @@ impl NarraServer {
                     "Try increasing max_hops or check entity relationships".to_string(),
                 ],
                 token_estimate: 0,
+                truncated: None,
             });
         }
 
@@ -563,53 +615,66 @@ impl NarraServer {
             by_table.entry(table).or_default().push(id.clone());
         }
 
-        // Fetch embeddings and compute similarities
-        let mut scored_results: Vec<(String, String, String, f32)> = Vec::new(); // (id, entity_type, name, score)
+        // Fetch embeddings per table in parallel
+        let futures: Vec<_> = by_table
+            .into_iter()
+            .map(|(table, ids)| {
+                let db = self.db.clone();
+                let qv = query_vector.clone();
+                async move {
+                    let name_field = match table.as_str() {
+                        "event" | "scene" | "note" | "fact" => "title",
+                        "knowledge" => "fact",
+                        _ => "name",
+                    };
 
-        for (table, ids) in &by_table {
-            let name_field = match table.as_str() {
-                "event" | "scene" => "title",
-                "knowledge" => "fact",
-                _ => "name",
-            };
+                    let id_csv: String =
+                        ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(", ");
 
-            // Build IN list for batch query
-            let id_list: Vec<String> = ids.iter().map(|id| id.to_string()).collect();
-            let id_csv = id_list.join(", ");
+                    let query_str = format!(
+                        "SELECT id, '{table}' AS entity_type, {name_field} AS name, embedding FROM {table} WHERE id IN [{ids}] AND embedding IS NOT NONE",
+                        table = table,
+                        name_field = name_field,
+                        ids = id_csv,
+                    );
 
-            let query_str = format!(
-                "SELECT id, '{table}' AS entity_type, {name_field} AS name, embedding FROM {table} WHERE id IN [{ids}] AND embedding IS NOT NONE",
-                table = table,
-                name_field = name_field,
-                ids = id_csv,
-            );
+                    let mut response = db
+                        .query(&query_str)
+                        .await
+                        .map_err(|e| format!("Failed to fetch embeddings: {}", e))?;
 
-            let mut response = self
-                .db
-                .query(&query_str)
-                .await
-                .map_err(|e| format!("Failed to fetch embeddings: {}", e))?;
+                    #[derive(serde::Deserialize)]
+                    struct EntityWithEmbedding {
+                        id: surrealdb::sql::Thing,
+                        entity_type: String,
+                        name: String,
+                        embedding: Vec<f32>,
+                    }
 
-            #[derive(serde::Deserialize)]
-            struct EntityWithEmbedding {
-                id: surrealdb::sql::Thing,
-                entity_type: String,
-                name: String,
-                embedding: Vec<f32>,
-            }
+                    let entities: Vec<EntityWithEmbedding> =
+                        response.take(0).unwrap_or_default();
 
-            let entities: Vec<EntityWithEmbedding> = response.take(0).unwrap_or_default();
+                    let scored: Vec<(String, String, String, f32)> = entities
+                        .into_iter()
+                        .map(|entity| {
+                            let similarity = cosine_similarity(&entity.embedding, &qv);
+                            (
+                                entity.id.to_string(),
+                                entity.entity_type,
+                                entity.name,
+                                similarity,
+                            )
+                        })
+                        .collect();
 
-            for entity in entities {
-                let similarity = cosine_similarity(&entity.embedding, &query_vector);
-                scored_results.push((
-                    entity.id.to_string(),
-                    entity.entity_type,
-                    entity.name,
-                    similarity,
-                ));
-            }
-        }
+                    Ok::<_, String>(scored)
+                }
+            })
+            .collect();
+
+        let table_results = futures::future::try_join_all(futures).await?;
+        let mut scored_results: Vec<(String, String, String, f32)> =
+            table_results.into_iter().flatten().collect();
 
         // Sort by similarity descending
         scored_results.sort_by(|a, b| b.3.partial_cmp(&a.3).unwrap_or(std::cmp::Ordering::Equal));
@@ -649,6 +714,7 @@ impl NarraServer {
             next_cursor: None,
             hints,
             token_estimate,
+            truncated: None,
         })
     }
 }

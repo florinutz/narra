@@ -85,10 +85,7 @@ mod tests {
     #[test]
     fn test_getting_started_prompt_with_focus() {
         let mut args = Map::new();
-        args.insert(
-            "focus".to_string(),
-            Value::String("characters".to_string()),
-        );
+        args.insert("focus".to_string(), Value::String("characters".to_string()));
 
         let result = get_getting_started_prompt(Some(args));
         let intro_msg = &result.messages[0];

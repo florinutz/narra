@@ -1,3 +1,4 @@
+use crate::mcp::types::KnowledgeSpec;
 use crate::mcp::{EntityResult, MutationResponse, NarraServer};
 use crate::models::{CertaintyLevel, KnowledgeStateCreate, LearningMethod};
 
@@ -144,6 +145,74 @@ impl NarraServer {
         Ok(MutationResponse {
             entity: result,
             entities: None,
+            impact: None,
+            hints,
+        })
+    }
+
+    pub(crate) async fn handle_batch_record_knowledge(
+        &self,
+        knowledge: Vec<KnowledgeSpec>,
+    ) -> Result<MutationResponse, String> {
+        let count = knowledge.len();
+        let mut entities = Vec::with_capacity(count);
+        let mut errors: Vec<String> = Vec::new();
+
+        for spec in knowledge {
+            match self
+                .handle_record_knowledge(
+                    spec.character_id.clone(),
+                    spec.target_id.clone(),
+                    spec.fact.clone(),
+                    spec.certainty,
+                    spec.method,
+                    spec.source_character_id,
+                    spec.event_id,
+                )
+                .await
+            {
+                Ok(response) => {
+                    entities.push(response.entity);
+                }
+                Err(e) => {
+                    errors.push(format!(
+                        "Failed to record knowledge for {} about {}: {}",
+                        spec.character_id, spec.target_id, e
+                    ));
+                }
+            }
+        }
+
+        if entities.is_empty() && !errors.is_empty() {
+            return Err(format!(
+                "All {} knowledge entries failed: {}",
+                count,
+                errors.join("; ")
+            ));
+        }
+
+        let mut hints = vec![format!(
+            "Recorded {}/{} knowledge entries",
+            entities.len(),
+            count
+        )];
+        if !errors.is_empty() {
+            hints.push(format!("Errors: {}", errors.join("; ")));
+        }
+        hints.push("Query temporal knowledge to see knowledge history".to_string());
+
+        let summary = EntityResult {
+            id: String::new(),
+            entity_type: "batch".to_string(),
+            name: format!("Batch: {} knowledge entries", entities.len()),
+            content: format!("Recorded {} knowledge entries", entities.len()),
+            confidence: Some(1.0),
+            last_modified: None,
+        };
+
+        Ok(MutationResponse {
+            entity: summary,
+            entities: Some(entities),
             impact: None,
             hints,
         })

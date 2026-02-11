@@ -33,6 +33,13 @@ impl NarraServer {
 
         let entity_id = note.id.to_string();
 
+        // Trigger embedding generation for the new note
+        if let Err(e) = self.staleness_manager.mark_stale(&entity_id).await {
+            tracing::warn!("Failed to mark note embedding stale: {}", e);
+        }
+        self.staleness_manager
+            .spawn_regeneration(entity_id.clone(), "note".to_string(), None);
+
         let result = EntityResult {
             id: entity_id.clone(),
             entity_type: "note".to_string(),

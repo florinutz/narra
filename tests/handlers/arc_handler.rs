@@ -34,6 +34,7 @@ async fn test_arc_history_no_snapshots() {
 
     let request = QueryRequest::ArcHistory {
         entity_id: format!("character:{}", alice.id.key()),
+        facet: None,
         limit: Some(50),
     };
 
@@ -57,6 +58,7 @@ async fn test_arc_history_nonexistent() {
 
     let request = QueryRequest::ArcHistory {
         entity_id: "character:nonexistent".to_string(),
+        facet: None,
         limit: Some(50),
     };
 

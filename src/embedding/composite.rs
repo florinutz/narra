@@ -3,7 +3,7 @@
 //! Generates natural-language descriptions of entities for embedding.
 //! Composite text should be semantically rich but concise (50-200 words).
 
-use crate::models::{Character, Event, Location, Scene};
+use crate::models::{Character, Event, Location, Note, Scene, UniverseFact};
 
 /// Generate composite text for a character.
 ///
@@ -555,6 +555,79 @@ pub fn narrative_composite(
     parts.join(". ") + "."
 }
 
+/// Generate composite text for a note.
+///
+/// Combines title and body, truncating body to ~200 words for embedding.
+///
+/// # Arguments
+///
+/// * `note` - The note entity
+///
+/// # Returns
+///
+/// A natural-language composite text suitable for embedding.
+pub fn note_composite(note: &Note) -> String {
+    let truncated_body = truncate_words(&note.body, 200);
+    format!("{}: {}", note.title, truncated_body)
+}
+
+/// Generate composite text for a universe fact.
+///
+/// Combines title, category, description, and enforcement level.
+///
+/// # Arguments
+///
+/// * `fact` - The universe fact entity
+///
+/// # Returns
+///
+/// A natural-language composite text suitable for embedding.
+pub fn fact_composite(fact: &UniverseFact) -> String {
+    use crate::models::fact::{EnforcementLevel, FactCategory};
+
+    let mut parts = Vec::new();
+
+    // Title with categories
+    let categories: Vec<&str> = fact
+        .categories
+        .iter()
+        .map(|c| match c {
+            FactCategory::PhysicsMagic => "physics/magic",
+            FactCategory::SocialCultural => "social/cultural",
+            FactCategory::Technology => "technology",
+            FactCategory::Custom(s) => s.as_str(),
+        })
+        .collect();
+    if !categories.is_empty() {
+        parts.push(format!("{} ({})", fact.title, categories.join(", ")));
+    } else {
+        parts.push(fact.title.clone());
+    }
+
+    // Description
+    parts.push(fact.description.clone());
+
+    // Enforcement level
+    let enforcement = match fact.enforcement_level {
+        EnforcementLevel::Informational => "informational",
+        EnforcementLevel::Warning => "warning",
+        EnforcementLevel::Strict => "strict",
+    };
+    parts.push(format!("Enforcement: {}", enforcement));
+
+    parts.join(". ") + "."
+}
+
+/// Truncate a string to approximately `max_words` words.
+fn truncate_words(text: &str, max_words: usize) -> String {
+    let words: Vec<&str> = text.split_whitespace().collect();
+    if words.len() <= max_words {
+        text.to_string()
+    } else {
+        words[..max_words].join(" ") + "..."
+    }
+}
+
 /// Generate composite text from raw JSON entity data.
 ///
 /// This is a convenience function for cases where you have raw JSON
@@ -626,6 +699,37 @@ pub fn generate_composite_text(entity_type: &str, entity_json: &serde_json::Valu
             let learning_method = entity_json["learning_method"].as_str();
 
             knowledge_composite(fact, character_name, certainty, learning_method)
+        }
+        "note" => {
+            let title = entity_json["title"].as_str().unwrap_or("Unknown");
+            let body = entity_json["body"].as_str().unwrap_or("");
+            let truncated_body = truncate_words(body, 200);
+            format!("{}: {}", title, truncated_body)
+        }
+        "fact" => {
+            let title = entity_json["title"].as_str().unwrap_or("Unknown");
+            let description = entity_json["description"].as_str().unwrap_or("");
+            let categories = entity_json["categories"]
+                .as_array()
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
+                .unwrap_or_default();
+            let enforcement = entity_json["enforcement_level"]
+                .as_str()
+                .unwrap_or("warning");
+
+            if categories.is_empty() {
+                format!("{}. {}. Enforcement: {}.", title, description, enforcement)
+            } else {
+                format!(
+                    "{} ({}). {}. Enforcement: {}.",
+                    title, categories, description, enforcement
+                )
+            }
         }
         _ => format!("Unknown entity type: {}", entity_type),
     }

@@ -52,6 +52,9 @@ const SCHEMA_016: &str = include_str!("migrations/016_embedding_metadata.surql")
 /// Character facets: multi-vector embeddings for faceted search
 const SCHEMA_017: &str = include_str!("migrations/017_character_facets.surql");
 
+/// Phases: persisted narrative phase detection results + membership edges
+const SCHEMA_018: &str = include_str!("migrations/018_phases.surql");
+
 /// Apply the database schema to an initialized database connection.
 ///
 /// This executes all DEFINE statements in the schema files, creating tables,
@@ -73,6 +76,7 @@ const SCHEMA_017: &str = include_str!("migrations/017_character_facets.surql");
 /// - 015: Drop unused HNSW vector indexes (brute-force cosine at narrative scale)
 /// - 016: Embedding metadata (world_meta table for model/dimensions/provider tracking)
 /// - 017: Character facets (multi-vector embeddings for faceted search)
+/// - 018: Phases (persisted narrative phase detection results + membership edges)
 ///
 /// It's safe to call multiple times - SurrealDB will update existing definitions
 /// rather than fail.
@@ -88,9 +92,11 @@ const SCHEMA_017: &str = include_str!("migrations/017_character_facets.surql");
 /// # Example
 ///
 /// ```no_run
-/// # use narra::db::{connection::init_db, schema::apply_schema};
+/// # use narra::db::{connection::{init_db, DbConfig}, schema::apply_schema};
+/// # use std::path::Path;
 /// # async fn example() -> Result<(), narra::NarraError> {
-/// let db = init_db("./data/narra.db").await?;
+/// let config = DbConfig::Embedded { path: Some("./data/narra.db".into()) };
+/// let db = init_db(&config, Path::new("./data")).await?;
 /// apply_schema(&db).await?;
 /// # Ok(())
 /// # }
@@ -113,5 +119,6 @@ pub async fn apply_schema(db: &NarraDb) -> Result<(), NarraError> {
     db.query(SCHEMA_015).await?;
     db.query(SCHEMA_016).await?;
     db.query(SCHEMA_017).await?;
+    db.query(SCHEMA_018).await?;
     Ok(())
 }

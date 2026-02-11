@@ -4,14 +4,16 @@ use anyhow::Result;
 use serde::Serialize;
 
 use crate::cli::output::{
-    output_json, output_json_list, print_header, print_hint, print_kv, print_table, OutputMode,
+    output_json, output_json_list, print_header, print_hint, print_kv, print_success, print_table,
+    OutputMode,
 };
 use crate::cli::resolve::resolve_single;
 use crate::init::AppContext;
 use crate::repository::KnowledgeRepository;
 use crate::services::{
     generate_suggested_fix, CentralityMetric, ClusteringService, CompositeIntelligenceService,
-    EntityType, GraphAnalyticsService, InfluenceService, IronyService, VectorOpsService,
+    EntityType, GraphAnalyticsService, InfluenceService, IronyService, PhaseWeights,
+    TemporalService, VectorOpsService,
 };
 
 pub async fn handle_centrality(
@@ -1418,6 +1420,355 @@ pub async fn handle_facets(
     }
 
     print_hint("Use 'narra find --facet <facet_name> <query>' to search by specific facet");
+
+    Ok(())
+}
+
+// =============================================================================
+// Narrative phase detection
+// =============================================================================
+
+#[allow(clippy::too_many_arguments)]
+pub async fn handle_phases(
+    ctx: &AppContext,
+    types: Option<Vec<String>>,
+    num_phases: Option<usize>,
+    weights_str: Option<String>,
+    save: bool,
+    clear: bool,
+    mode: OutputMode,
+) -> Result<()> {
+    let service = TemporalService::new(ctx.db.clone());
+
+    // --clear: wipe saved phases and return
+    if clear {
+        let count = service
+            .delete_all_phases()
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to clear phases: {}", e))?;
+        if mode == OutputMode::Json {
+            output_json(&serde_json::json!({ "cleared": count }));
+        } else {
+            print_success(&format!("Cleared {} saved phase(s)", count));
+        }
+        return Ok(());
+    }
+
+    let entity_types: Vec<EntityType> = match types {
+        Some(ref type_strs) => type_strs
+            .iter()
+            .filter_map(|t| match t.as_str() {
+                "character" | "char" => Some(EntityType::Character),
+                "location" => Some(EntityType::Location),
+                "event" => Some(EntityType::Event),
+                "scene" => Some(EntityType::Scene),
+                "knowledge" => Some(EntityType::Knowledge),
+                _ => {
+                    eprintln!("Unknown type '{}', skipping", t);
+                    None
+                }
+            })
+            .collect(),
+        None => EntityType::embeddable(),
+    };
+
+    let weights = if let Some(ref w) = weights_str {
+        let parts: Vec<f32> = w.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+        if parts.len() == 3 {
+            Some(PhaseWeights {
+                content: parts[0],
+                neighborhood: parts[1],
+                temporal: parts[2],
+            })
+        } else {
+            eprintln!(
+                "Invalid weights format '{}', using defaults (expected 3 comma-separated values)",
+                w
+            );
+            None
+        }
+    } else {
+        None
+    };
+
+    let result = service
+        .detect_phases(entity_types, num_phases, weights)
+        .await
+        .map_err(|e| anyhow::anyhow!("Phase detection failed: {}", e))?;
+
+    // --save: persist after detection
+    if save {
+        service
+            .save_phases(&result)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to save phases: {}", e))?;
+    }
+
+    if mode == OutputMode::Json {
+        output_json(&result);
+    } else {
+        println!(
+            "Narrative Phases: {} phases from {} entities ({} without embeddings, {} without timeline anchor)",
+            result.phases.len(),
+            result.total_entities,
+            result.entities_without_embeddings,
+            result.entities_without_temporal_anchor
+        );
+        println!(
+            "Weights: content={:.2}, neighborhood={:.2}, temporal={:.2}",
+            result.weights_used.content,
+            result.weights_used.neighborhood,
+            result.weights_used.temporal
+        );
+
+        for phase in &result.phases {
+            let type_breakdown: String = phase
+                .entity_type_counts
+                .iter()
+                .map(|(t, c)| format!("{} {}", c, t))
+                .collect::<Vec<_>>()
+                .join(", ");
+
+            let seq_info = phase
+                .sequence_range
+                .map(|(min, max)| format!(" [timeline {}-{}]", min, max))
+                .unwrap_or_default();
+
+            print_header(&format!(
+                "Phase {}: {} ({} members: {}){}",
+                phase.phase_id, phase.label, phase.member_count, type_breakdown, seq_info
+            ));
+
+            let rows: Vec<Vec<String>> = phase
+                .members
+                .iter()
+                .map(|m| {
+                    vec![
+                        m.entity_type.clone(),
+                        m.entity_id.clone(),
+                        m.name.clone(),
+                        format!("{:.4}", m.centrality),
+                        m.sequence_position
+                            .map(|p| format!("{:.2}", p))
+                            .unwrap_or_else(|| "-".to_string()),
+                    ]
+                })
+                .collect();
+            print_table(&["Type", "ID", "Name", "Centrality", "Position"], rows);
+        }
+
+        if save {
+            print_success("Phases saved to database");
+            print_hint("Use 'narra list phase' to view saved phases, 'narra analyze phases --clear' to remove");
+        } else {
+            print_hint(
+                "Use '--save' to persist phases, or 'narra analyze around <entity>' for narrative neighbors",
+            );
+        }
+    }
+
+    Ok(())
+}
+
+pub async fn handle_around(
+    ctx: &AppContext,
+    anchor: &str,
+    types: Option<Vec<String>>,
+    limit: usize,
+    mode: OutputMode,
+    no_semantic: bool,
+) -> Result<()> {
+    let anchor_id = resolve_single(ctx, anchor, no_semantic).await?;
+
+    let entity_types: Vec<EntityType> = match types {
+        Some(ref type_strs) => type_strs
+            .iter()
+            .filter_map(|t| match t.as_str() {
+                "character" | "char" => Some(EntityType::Character),
+                "location" => Some(EntityType::Location),
+                "event" => Some(EntityType::Event),
+                "scene" => Some(EntityType::Scene),
+                "knowledge" => Some(EntityType::Knowledge),
+                _ => {
+                    eprintln!("Unknown type '{}', skipping", t);
+                    None
+                }
+            })
+            .collect(),
+        None => EntityType::embeddable(),
+    };
+
+    let service = TemporalService::new(ctx.db.clone());
+    let result = service
+        .query_around(&anchor_id, entity_types, limit)
+        .await
+        .map_err(|e| anyhow::anyhow!("Query around failed: {}", e))?;
+
+    if mode == OutputMode::Json {
+        output_json(&result);
+    } else {
+        let phase_info = if result.anchor_phases.is_empty() {
+            "no phase".to_string()
+        } else {
+            format!(
+                "phase(s) {}",
+                result
+                    .anchor_phases
+                    .iter()
+                    .map(|p| p.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        };
+
+        println!(
+            "Narrative neighborhood of {} ({}) - {}",
+            result.anchor.name, result.anchor.entity_id, phase_info
+        );
+
+        let rows: Vec<Vec<String>> = result
+            .neighbors
+            .iter()
+            .enumerate()
+            .map(|(i, n)| {
+                vec![
+                    format!("{}", i + 1),
+                    n.entity_type.clone(),
+                    n.name.clone(),
+                    format!("{:.4}", n.similarity),
+                    if n.shared_scenes > 0 {
+                        format!("{}", n.shared_scenes)
+                    } else {
+                        "-".to_string()
+                    },
+                    n.sequence_distance
+                        .map(|d| format!("{:.2}", d))
+                        .unwrap_or_else(|| "-".to_string()),
+                ]
+            })
+            .collect();
+        print_table(
+            &[
+                "#",
+                "Type",
+                "Name",
+                "Similarity",
+                "Shared Scenes",
+                "Timeline Dist",
+            ],
+            rows,
+        );
+    }
+
+    Ok(())
+}
+
+pub async fn handle_transitions(
+    ctx: &AppContext,
+    types: Option<Vec<String>>,
+    num_phases: Option<usize>,
+    weights_str: Option<String>,
+    mode: OutputMode,
+) -> Result<()> {
+    let entity_types: Vec<EntityType> = match types {
+        Some(ref type_strs) => type_strs
+            .iter()
+            .filter_map(|t| match t.as_str() {
+                "character" | "char" => Some(EntityType::Character),
+                "location" => Some(EntityType::Location),
+                "event" => Some(EntityType::Event),
+                "scene" => Some(EntityType::Scene),
+                "knowledge" => Some(EntityType::Knowledge),
+                _ => {
+                    eprintln!("Unknown type '{}', skipping", t);
+                    None
+                }
+            })
+            .collect(),
+        None => EntityType::embeddable(),
+    };
+
+    let weights = if let Some(ref w) = weights_str {
+        let parts: Vec<f32> = w.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+        if parts.len() == 3 {
+            Some(PhaseWeights {
+                content: parts[0],
+                neighborhood: parts[1],
+                temporal: parts[2],
+            })
+        } else {
+            eprintln!(
+                "Invalid weights format '{}', using defaults (expected 3 comma-separated values)",
+                w
+            );
+            None
+        }
+    } else {
+        None
+    };
+
+    let service = TemporalService::new(ctx.db.clone());
+    let result = service
+        .detect_transitions(entity_types, num_phases, weights)
+        .await
+        .map_err(|e| anyhow::anyhow!("Transition analysis failed: {}", e))?;
+
+    if mode == OutputMode::Json {
+        output_json(&result);
+    } else {
+        println!(
+            "Phase Transitions: {} bridge entities across {} phases",
+            result.total_bridge_entities, result.phases_analyzed
+        );
+
+        if !result.phase_connections.is_empty() {
+            print_header("Phase Connections");
+            let conn_rows: Vec<Vec<String>> = result
+                .phase_connections
+                .iter()
+                .map(|(a, b, count)| {
+                    vec![
+                        format!("Phase {}", a),
+                        format!("Phase {}", b),
+                        format!("{} bridges", count),
+                    ]
+                })
+                .collect();
+            print_table(&["From", "To", "Shared Bridges"], conn_rows);
+        }
+
+        if !result.transitions.is_empty() {
+            print_header("Bridge Entities");
+            let rows: Vec<Vec<String>> = result
+                .transitions
+                .iter()
+                .map(|t| {
+                    let phases = t
+                        .phase_ids
+                        .iter()
+                        .map(|p| p.to_string())
+                        .collect::<Vec<_>>()
+                        .join(",");
+                    vec![
+                        t.entity_type.clone(),
+                        t.name.clone(),
+                        phases,
+                        format!("{:.3}", t.bridge_strength),
+                        t.sequence_span
+                            .map(|s| format!("{:.0}", s))
+                            .unwrap_or_else(|| "-".to_string()),
+                    ]
+                })
+                .collect();
+            print_table(&["Type", "Name", "Phases", "Strength", "Seq Span"], rows);
+        } else {
+            println!("No bridge entities found — each entity belongs to exactly one phase.");
+        }
+
+        print_hint(
+            "Bridge entities are characters, events, or locations that connect narrative arcs",
+        );
+    }
 
     Ok(())
 }

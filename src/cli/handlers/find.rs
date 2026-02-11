@@ -35,6 +35,7 @@ pub async fn handle_find(
     no_semantic: bool,
     entity_type: Option<&str>,
     limit: usize,
+    phase: Option<usize>,
     mode: OutputMode,
 ) -> Result<()> {
     // Faceted search overrides other modes
@@ -124,14 +125,66 @@ pub async fn handle_find(
         (r, mode_label)
     };
 
+    // Phase filtering: if --phase is specified, detect phases and filter results
+    let (results, phase_label) = if let Some(phase_id) = phase {
+        use crate::services::{EntityType as ET, TemporalService};
+
+        let temporal_service = TemporalService::new(ctx.db.clone());
+        match temporal_service
+            .load_or_detect_phases(ET::embeddable(), None, None)
+            .await
+        {
+            Ok(phase_result) => {
+                let target_phase = phase_result.phases.iter().find(|p| p.phase_id == phase_id);
+                match target_phase {
+                    Some(phase) => {
+                        let phase_entity_ids: std::collections::HashSet<String> =
+                            phase.members.iter().map(|m| m.entity_id.clone()).collect();
+                        let filtered: Vec<_> = results
+                            .into_iter()
+                            .filter(|r| phase_entity_ids.contains(&r.id))
+                            .collect();
+                        (filtered, Some(phase.label.clone()))
+                    }
+                    None => {
+                        let available: Vec<String> = phase_result
+                            .phases
+                            .iter()
+                            .map(|p| format!("{}: {}", p.phase_id, p.label))
+                            .collect();
+                        anyhow::bail!(
+                            "Phase {} not found. Available phases: {}",
+                            phase_id,
+                            available.join(", ")
+                        );
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!(
+                    "Warning: phase detection failed ({}), showing unfiltered results",
+                    e
+                );
+                (results, None)
+            }
+        }
+    } else {
+        (results, None)
+    };
+
     if mode == OutputMode::Json {
         output_json_list(&results);
         return Ok(());
     }
 
+    let phase_info = phase_label
+        .map(|l| format!(", phase: {}", l))
+        .unwrap_or_default();
+
     println!(
-        "Search ({}) for '{}': {} results\n",
+        "Search ({}{}) for '{}': {} results\n",
         search_mode,
+        phase_info,
         query,
         results.len()
     );
@@ -151,7 +204,13 @@ pub async fn handle_find(
     print_table(&["ID", "Type", "Name", "Score"], rows);
 
     if results.is_empty() {
-        print_hint("Try broadening your query or removing the --type filter.");
+        if phase.is_some() {
+            print_hint(
+                "No results in this phase. Try removing --phase or searching a different phase.",
+            );
+        } else {
+            print_hint("Try broadening your query or removing the --type filter.");
+        }
     }
 
     Ok(())
@@ -206,7 +265,8 @@ pub async fn handle_semantic_join(
             EntityType::Event => ("event", "title"),
             EntityType::Scene => ("scene", "title"),
             EntityType::Knowledge => ("knowledge", "fact"),
-            EntityType::Note => continue,
+            EntityType::Note => ("note", "title"),
+            EntityType::Fact => ("fact", "title"),
         };
 
         let k = limit * 2;

@@ -18,6 +18,7 @@ pub enum EntityType {
     Scene,
     Knowledge,
     Note,
+    Fact,
 }
 
 impl EntityType {
@@ -30,6 +31,7 @@ impl EntityType {
             EntityType::Scene => "scene",
             EntityType::Knowledge => "knowledge",
             EntityType::Note => "note",
+            EntityType::Fact => "fact",
         }
     }
 
@@ -42,6 +44,7 @@ impl EntityType {
             EntityType::Scene,
             EntityType::Knowledge,
             EntityType::Note,
+            EntityType::Fact,
         ]
     }
 
@@ -53,6 +56,8 @@ impl EntityType {
             EntityType::Event,
             EntityType::Scene,
             EntityType::Knowledge,
+            EntityType::Note,
+            EntityType::Fact,
         ]
     }
 
@@ -65,6 +70,8 @@ impl EntityType {
                 | EntityType::Event
                 | EntityType::Scene
                 | EntityType::Knowledge
+                | EntityType::Note
+                | EntityType::Fact
         )
     }
 }
@@ -219,6 +226,17 @@ pub trait SearchService: Send + Sync {
         weights: &HashMap<String, f32>,
         filter: SearchFilter,
     ) -> Result<Vec<SearchResult>, NarraError>;
+
+    /// Re-rank an existing set of search results using the cross-encoder.
+    ///
+    /// Fetches composite_text for each result and uses the BGE reranker
+    /// to re-score them against the query. Returns results in new order.
+    /// Falls back to returning results unchanged if reranker is unavailable.
+    async fn rerank_results(
+        &self,
+        query: &str,
+        results: Vec<SearchResult>,
+    ) -> Result<Vec<SearchResult>, NarraError>;
 }
 
 /// SurrealDB implementation of SearchService.
@@ -351,7 +369,7 @@ impl SurrealSearchService {
         let name_field = match entity_type {
             EntityType::Event | EntityType::Scene => "title",
             EntityType::Knowledge => "fact",
-            EntityType::Note => "title", // Notes use title as display name
+            EntityType::Note | EntityType::Fact => "title",
             _ => "name",
         };
 
@@ -505,7 +523,7 @@ impl SearchService for SurrealSearchService {
                     let name_field = match entity_type {
                         EntityType::Event | EntityType::Scene => "title",
                         EntityType::Knowledge => "fact",
-                        EntityType::Note => "title",
+                        EntityType::Note | EntityType::Fact => "title",
                         _ => "name",
                     };
 
@@ -659,6 +677,7 @@ impl SearchService for SurrealSearchService {
                     let name_field = match entity_type {
                         EntityType::Event | EntityType::Scene => "title",
                         EntityType::Knowledge => "fact",
+                        EntityType::Note | EntityType::Fact => "title",
                         _ => "name",
                     };
 
@@ -764,6 +783,7 @@ impl SearchService for SurrealSearchService {
                     let name_field = match entity_type {
                         EntityType::Event | EntityType::Scene => "title",
                         EntityType::Knowledge => "fact",
+                        EntityType::Note | EntityType::Fact => "title",
                         _ => "name",
                     };
 
@@ -881,8 +901,14 @@ impl SearchService for SurrealSearchService {
         // Fetch composite_text for each candidate to pass to the cross-encoder
         let mut texts = Vec::with_capacity(candidates.len());
         for candidate in &candidates {
-            let composite_query = format!("SELECT composite_text FROM {} LIMIT 1", candidate.id);
-            let mut resp = self.db.query(&composite_query).await?;
+            let record_id = surrealdb::RecordId::from(
+                candidate.id.split_once(':').unwrap_or(("_", &candidate.id)),
+            );
+            let mut resp = self
+                .db
+                .query("SELECT composite_text FROM $id LIMIT 1")
+                .bind(("id", record_id))
+                .await?;
 
             #[derive(Deserialize)]
             struct CompositeRow {
@@ -1117,6 +1143,69 @@ impl SearchService for SurrealSearchService {
         }
 
         Ok(results)
+    }
+
+    async fn rerank_results(
+        &self,
+        query: &str,
+        results: Vec<SearchResult>,
+    ) -> Result<Vec<SearchResult>, NarraError> {
+        // If no reranker available, return results unchanged
+        let reranker = match &self.reranker {
+            Some(r) if r.is_available() => r.clone(),
+            _ => return Ok(results),
+        };
+
+        if results.is_empty() {
+            return Ok(results);
+        }
+
+        // Fetch composite_text for each result to pass to the cross-encoder
+        let mut texts = Vec::with_capacity(results.len());
+        for result in &results {
+            let record_id =
+                surrealdb::RecordId::from(result.id.split_once(':').unwrap_or(("_", &result.id)));
+            let mut resp = self
+                .db
+                .query("SELECT composite_text FROM $id LIMIT 1")
+                .bind(("id", record_id))
+                .await?;
+
+            #[derive(Deserialize)]
+            struct CompositeRow {
+                composite_text: Option<String>,
+            }
+
+            let row: Option<CompositeRow> = resp.take(0).unwrap_or(None);
+            let text = row
+                .and_then(|r| r.composite_text)
+                .unwrap_or_else(|| result.name.clone());
+            texts.push(text);
+        }
+
+        // Re-rank with cross-encoder
+        let scored = match reranker.rerank(query, &texts).await {
+            Ok(scored) => scored,
+            Err(e) => {
+                tracing::warn!("Reranker failed, returning original order: {}", e);
+                return Ok(results);
+            }
+        };
+
+        // Map back to SearchResults with new scores
+        let reranked: Vec<SearchResult> = scored
+            .into_iter()
+            .filter_map(|(idx, score)| {
+                results.get(idx).map(|r| SearchResult {
+                    id: r.id.clone(),
+                    entity_type: r.entity_type.clone(),
+                    name: r.name.clone(),
+                    score,
+                })
+            })
+            .collect();
+
+        Ok(reranked)
     }
 }
 

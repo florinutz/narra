@@ -3,7 +3,7 @@ use crate::mcp::{DetailLevel, EntityResult, QueryResponse};
 use crate::repository::{EntityRepository, KnowledgeRepository};
 use crate::services::{EntityType, SearchFilter};
 
-use super::{create_cursor, parse_cursor};
+use super::{create_cursor, parse_cursor, parse_entity_types};
 
 impl NarraServer {
     pub(crate) async fn handle_lookup(
@@ -96,6 +96,7 @@ impl NarraServer {
             next_cursor: None,
             hints,
             token_estimate,
+            truncated: None,
         })
     }
 
@@ -148,6 +149,7 @@ impl NarraServer {
             next_cursor: None,
             hints,
             token_estimate,
+            truncated: None,
         })
     }
 
@@ -165,22 +167,7 @@ impl NarraServer {
         };
 
         // Convert entity type strings to EntityType enum
-        let type_filter = if let Some(types) = entity_types {
-            types
-                .iter()
-                .filter_map(|t| match t.to_lowercase().as_str() {
-                    "character" => Some(EntityType::Character),
-                    "location" => Some(EntityType::Location),
-                    "event" => Some(EntityType::Event),
-                    "scene" => Some(EntityType::Scene),
-                    "knowledge" => Some(EntityType::Knowledge),
-                    "note" => Some(EntityType::Note),
-                    _ => None,
-                })
-                .collect::<Vec<_>>()
-        } else {
-            vec![]
-        };
+        let type_filter = parse_entity_types(entity_types);
 
         // Try full-text search first
         // Fetch enough results to cover offset + limit + 1 (for has_more detection)
@@ -252,6 +239,7 @@ impl NarraServer {
             next_cursor,
             hints,
             token_estimate,
+            truncated: None,
         })
     }
 
@@ -326,6 +314,7 @@ impl NarraServer {
             next_cursor: None,
             hints,
             token_estimate: knowledge_states.len() * 50,
+            truncated: None,
         })
     }
 
@@ -429,6 +418,7 @@ impl NarraServer {
             next_cursor: None,
             hints,
             token_estimate,
+            truncated: None,
         })
     }
 
@@ -488,6 +478,7 @@ impl NarraServer {
             next_cursor: None,
             hints,
             token_estimate,
+            truncated: None,
         })
     }
 
@@ -549,6 +540,7 @@ impl NarraServer {
             next_cursor: None,
             hints,
             token_estimate,
+            truncated: None,
         })
     }
 
@@ -631,6 +623,9 @@ impl NarraServer {
             facts.truncate(limit);
         }
 
+        // Abbreviate content for list results (>5 items)
+        let should_abbreviate = facts.len() > 5;
+
         let entity_results: Vec<EntityResult> = facts
             .iter()
             .map(|f| {
@@ -650,13 +645,35 @@ impl NarraServer {
                     .collect::<Vec<_>>()
                     .join(", ");
 
+                // Abbreviate description if showing many results
+                let description = if should_abbreviate {
+                    let desc = &f.description;
+                    if let Some(first_sentence_end) = desc.find(". ") {
+                        let mut abbrev = desc[..first_sentence_end + 1].to_string();
+                        if abbrev.len() > 100 {
+                            abbrev.truncate(100);
+                            abbrev.push_str("...");
+                        }
+                        abbrev
+                    } else {
+                        let mut abbrev = desc.clone();
+                        if abbrev.len() > 100 {
+                            abbrev.truncate(100);
+                            abbrev.push_str("...");
+                        }
+                        abbrev
+                    }
+                } else {
+                    f.description.clone()
+                };
+
                 EntityResult {
                     id: f.id.to_string(),
                     entity_type: "universe_fact".to_string(),
                     name: f.title.clone(),
                     content: format!(
                         "{} | Categories: {} | Enforcement: {:?}",
-                        f.description,
+                        description,
                         if categories_str.is_empty() {
                             "none".to_string()
                         } else {
@@ -707,6 +724,7 @@ impl NarraServer {
             next_cursor,
             hints,
             token_estimate,
+            truncated: None,
         })
     }
 }

@@ -329,22 +329,24 @@ impl NarraServer {
         // Detect entity type from ID format (table:id)
         let entity_type = self.detect_entity_type(entity_id);
 
-        // Check consistency BEFORE mutation (proactive)
-        let consistency_result = self
-            .consistency_service
-            .check_entity_mutation(entity_id, &fields)
-            .await
-            .map_err(|e| format!("Consistency check failed: {}", e))?;
+        // Check consistency and analyze impact in parallel (both are read-only pre-mutation checks)
+        let (consistency_result, impact_analysis) = tokio::try_join!(
+            async {
+                self.consistency_service
+                    .check_entity_mutation(entity_id, &fields)
+                    .await
+                    .map_err(|e| format!("Consistency check failed: {}", e))
+            },
+            async {
+                self.impact_service
+                    .analyze_impact(entity_id, "update", 3)
+                    .await
+                    .map_err(|e| format!("Impact analysis failed: {}", e))
+            },
+        )?;
 
         let consistency_warnings =
             self.process_consistency_result(&consistency_result, &format!("Update {}", entity_id))?;
-
-        // Analyze impact BEFORE making the change (for high-severity warnings)
-        let impact_analysis = self
-            .impact_service
-            .analyze_impact(entity_id, "update", 3)
-            .await
-            .map_err(|e| format!("Impact analysis failed: {}", e))?;
 
         // Perform update based on entity type
         // Note: Update structs don't derive Deserialize, so we manually extract fields
@@ -467,7 +469,7 @@ impl NarraServer {
         // Mark embedding stale and trigger regeneration for embeddable entity types
         if matches!(
             entity_type.as_str(),
-            "character" | "location" | "event" | "scene"
+            "character" | "location" | "event" | "scene" | "note" | "fact"
         ) {
             if let Err(e) = self.staleness_manager.mark_stale(entity_id).await {
                 tracing::warn!("Failed to mark embedding stale for {}: {}", entity_id, e);

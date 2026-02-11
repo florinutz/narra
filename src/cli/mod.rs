@@ -96,6 +96,9 @@ pub enum Commands {
         /// Maximum results
         #[arg(long, default_value = "20")]
         limit: usize,
+        /// Filter results to a specific narrative phase (run phase detection first)
+        #[arg(long)]
+        phase: Option<usize>,
         #[command(subcommand)]
         subcommand: Option<FindCommands>,
     },
@@ -545,12 +548,30 @@ pub enum WorldCommands {
         /// Output file path
         #[arg(long, short)]
         output: Option<PathBuf>,
+        /// Color nodes by detected narrative phase
+        #[arg(long)]
+        phases: bool,
     },
     /// Create baseline arc snapshots for entities with embeddings
     BaselineArcs {
         /// Entity type filter (character or knowledge; omit for both)
         #[arg(long, name = "type")]
         entity_type: Option<String>,
+    },
+    /// Compare embedding model quality (re-embeds a sample with a comparison model)
+    Benchmark {
+        /// Comparison model name (default: bge-large-en-v1.5)
+        #[arg(long, default_value = "bge-large-en-v1.5")]
+        model: String,
+        /// Test queries (if omitted, derives from entity names)
+        #[arg(long, value_delimiter = ' ', num_args = 1..)]
+        queries: Vec<String>,
+        /// Max entities to re-embed for comparison
+        #[arg(long, default_value = "50")]
+        sample: usize,
+        /// Top-k results to compare per query
+        #[arg(long, default_value = "10")]
+        limit: usize,
     },
 }
 
@@ -771,6 +792,47 @@ pub enum AnalyzeCommands {
     Facets {
         /// Character ID or name
         character: String,
+    },
+    /// Auto-detect narrative phases via temporal-semantic clustering
+    Phases {
+        /// Entity types to include (comma-separated: char,event,location,scene,knowledge)
+        #[arg(long, value_delimiter = ',')]
+        types: Option<Vec<String>>,
+        /// Number of phases (auto-detected if not specified)
+        #[arg(long)]
+        num_phases: Option<usize>,
+        /// Content/neighborhood/temporal weights (comma-separated, e.g. "0.6,0.25,0.15")
+        #[arg(long)]
+        weights: Option<String>,
+        /// Persist detected phases to database for instant loading
+        #[arg(long)]
+        save: bool,
+        /// Clear all saved phases from database
+        #[arg(long)]
+        clear: bool,
+    },
+    /// Find entities narratively close to an anchor
+    Around {
+        /// Anchor entity (ID or name)
+        anchor: String,
+        /// Entity types to include (comma-separated)
+        #[arg(long, value_delimiter = ',')]
+        types: Option<Vec<String>>,
+        /// Max results (default: 20)
+        #[arg(long, default_value = "20")]
+        limit: usize,
+    },
+    /// Identify entities that bridge narrative phases (arc transition points)
+    Transitions {
+        /// Entity types to include (comma-separated: char,event,location,scene,knowledge)
+        #[arg(long, value_delimiter = ',')]
+        types: Option<Vec<String>>,
+        /// Number of phases to detect (auto if not specified)
+        #[arg(long)]
+        num_phases: Option<usize>,
+        /// Content/neighborhood/temporal weights (comma-separated, e.g. "0.6,0.25,0.15")
+        #[arg(long)]
+        weights: Option<String>,
     },
 }
 
@@ -1040,6 +1102,7 @@ pub async fn execute(
             facet,
             entity_type,
             limit,
+            phase,
             subcommand,
         } => match subcommand {
             Some(FindCommands::Join {
@@ -1132,6 +1195,7 @@ pub async fn execute(
                     no_semantic,
                     entity_type.as_deref(),
                     *limit,
+                    *phase,
                     mode,
                 )
                 .await?
@@ -1231,9 +1295,22 @@ pub async fn execute(
                 scope,
                 depth,
                 output,
-            } => handlers::world::handle_graph(ctx, scope, *depth, output.as_deref(), mode).await?,
+                phases,
+            } => {
+                handlers::world::handle_graph(ctx, scope, *depth, output.as_deref(), *phases, mode)
+                    .await?
+            }
             WorldCommands::BaselineArcs { entity_type } => {
                 handlers::world::handle_baseline_arcs(ctx, entity_type.as_deref(), mode).await?
+            }
+            WorldCommands::Benchmark {
+                model,
+                queries,
+                sample,
+                limit,
+            } => {
+                handlers::world::handle_benchmark(ctx, model, queries, *sample, *limit, mode)
+                    .await?
             }
         },
 
@@ -1457,6 +1534,53 @@ pub async fn execute(
             }
             AnalyzeCommands::Facets { character } => {
                 handlers::analyze::handle_facets(ctx, character, mode, no_semantic).await?
+            }
+            AnalyzeCommands::Phases {
+                types,
+                num_phases,
+                weights,
+                save,
+                clear,
+            } => {
+                handlers::analyze::handle_phases(
+                    ctx,
+                    types.clone(),
+                    *num_phases,
+                    weights.clone(),
+                    *save,
+                    *clear,
+                    mode,
+                )
+                .await?
+            }
+            AnalyzeCommands::Around {
+                anchor,
+                types,
+                limit,
+            } => {
+                handlers::analyze::handle_around(
+                    ctx,
+                    anchor,
+                    types.clone(),
+                    *limit,
+                    mode,
+                    no_semantic,
+                )
+                .await?
+            }
+            AnalyzeCommands::Transitions {
+                types,
+                num_phases,
+                weights,
+            } => {
+                handlers::analyze::handle_transitions(
+                    ctx,
+                    types.clone(),
+                    *num_phases,
+                    weights.clone(),
+                    mode,
+                )
+                .await?
             }
         },
 
@@ -1695,7 +1819,10 @@ pub async fn execute(
             scope,
             depth,
             output,
-        } => handlers::world::handle_graph(ctx, scope, *depth, output.as_deref(), mode).await?,
+        } => {
+            handlers::world::handle_graph(ctx, scope, *depth, output.as_deref(), false, mode)
+                .await?
+        }
     }
 
     Ok(())

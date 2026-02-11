@@ -4,6 +4,8 @@ use crate::models::knowledge::find_knowledge_conflicts;
 use crate::services::EntityType;
 use crate::utils::math::cosine_similarity;
 
+use super::parse_entity_types;
+
 impl NarraServer {
     pub(crate) async fn handle_dramatic_irony_report(
         &self,
@@ -81,6 +83,7 @@ impl NarraServer {
             next_cursor: None,
             hints,
             token_estimate,
+            truncated: None,
         })
     }
 
@@ -163,6 +166,7 @@ impl NarraServer {
             next_cursor: None,
             hints,
             token_estimate,
+            truncated: None,
         })
     }
 
@@ -177,21 +181,13 @@ impl NarraServer {
         let clustering_service = ClusteringService::new(self.db.clone());
 
         // Convert entity_types strings to EntityType enum (default to embeddable)
-        let type_filter = if let Some(types) = entity_types {
-            types
-                .iter()
-                .filter_map(|t| match t.to_lowercase().as_str() {
-                    "character" => Some(EntityType::Character),
-                    "location" => Some(EntityType::Location),
-                    "event" => Some(EntityType::Event),
-                    "scene" => Some(EntityType::Scene),
-                    "knowledge" => Some(EntityType::Knowledge),
-                    _ => None,
-                })
-                .collect()
-        } else {
-            // Default to all embeddable types
-            EntityType::embeddable()
+        let type_filter = {
+            let parsed = parse_entity_types(entity_types);
+            if parsed.is_empty() {
+                EntityType::embeddable()
+            } else {
+                parsed
+            }
         };
 
         // Call discover_themes
@@ -266,6 +262,7 @@ impl NarraServer {
             next_cursor: None,
             hints,
             token_estimate,
+            truncated: None,
         })
     }
 
@@ -395,6 +392,7 @@ impl NarraServer {
             next_cursor: None,
             hints,
             token_estimate,
+            truncated: None,
         })
     }
 
@@ -439,6 +437,7 @@ impl NarraServer {
                         .to_string(),
                 ],
                 token_estimate: 0,
+                truncated: None,
             });
         }
 
@@ -528,6 +527,7 @@ impl NarraServer {
                     format!("Try lowering min_asymmetry (current: {:.2})", min_asymmetry),
                 ],
                 token_estimate: 0,
+                truncated: None,
             });
         }
 
@@ -663,6 +663,7 @@ impl NarraServer {
             next_cursor: None,
             hints,
             token_estimate,
+            truncated: None,
         })
     }
 
@@ -743,6 +744,450 @@ impl NarraServer {
             next_cursor: None,
             hints,
             token_estimate,
+            truncated: None,
+        })
+    }
+
+    // ========================================================================
+    // Narrative Phase Detection
+    // ========================================================================
+
+    pub(crate) async fn handle_detect_phases(
+        &self,
+        entity_types: Option<Vec<String>>,
+        num_phases: Option<usize>,
+        content_weight: Option<f32>,
+        neighborhood_weight: Option<f32>,
+        temporal_weight: Option<f32>,
+        save: bool,
+    ) -> Result<QueryResponse, String> {
+        use crate::services::{PhaseWeights, TemporalService};
+
+        let type_filter = {
+            let parsed = parse_entity_types(entity_types);
+            if parsed.is_empty() {
+                EntityType::embeddable()
+            } else {
+                parsed
+            }
+        };
+
+        let weights = if content_weight.is_some()
+            || neighborhood_weight.is_some()
+            || temporal_weight.is_some()
+        {
+            Some(PhaseWeights {
+                content: content_weight.unwrap_or(0.6),
+                neighborhood: neighborhood_weight.unwrap_or(0.25),
+                temporal: temporal_weight.unwrap_or(0.15),
+            })
+        } else {
+            None
+        };
+
+        let service = TemporalService::new(self.db.clone());
+        let result = service
+            .detect_phases(type_filter, num_phases, weights)
+            .await
+            .map_err(|e| format!("Phase detection failed: {}", e))?;
+
+        if save {
+            service
+                .save_phases(&result)
+                .await
+                .map_err(|e| format!("Failed to save phases: {}", e))?;
+        }
+
+        let entity_results: Vec<EntityResult> = result
+            .phases
+            .iter()
+            .map(|phase| {
+                let type_breakdown: String = phase
+                    .entity_type_counts
+                    .iter()
+                    .map(|(t, c)| format!("{} {}", c, t))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+
+                let seq_info = phase
+                    .sequence_range
+                    .map(|(min, max)| format!(" | timeline: {}-{}", min, max))
+                    .unwrap_or_default();
+
+                let member_list: String = phase
+                    .members
+                    .iter()
+                    .take(5)
+                    .map(|m| {
+                        let pos = m
+                            .sequence_position
+                            .map(|p| format!(" @{:.2}", p))
+                            .unwrap_or_default();
+                        format!("{} ({}{})", m.name, m.entity_type, pos)
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+
+                let content = format!(
+                    "{} members ({}){}{}",
+                    phase.member_count,
+                    type_breakdown,
+                    seq_info,
+                    if phase.members.len() > 5 {
+                        format!(
+                            "\nTop members: {} ... and {} more",
+                            member_list,
+                            phase.members.len() - 5
+                        )
+                    } else {
+                        format!("\nMembers: {}", member_list)
+                    }
+                );
+
+                EntityResult {
+                    id: format!("phase-{}", phase.phase_id),
+                    entity_type: "narrative_phase".to_string(),
+                    name: format!("Phase {}: {}", phase.phase_id, phase.label),
+                    content,
+                    confidence: None,
+                    last_modified: None,
+                }
+            })
+            .collect();
+
+        let total = entity_results.len();
+        let token_estimate = entity_results
+            .iter()
+            .map(|r| r.content.len() / 4 + 30)
+            .sum();
+
+        let mut hints = vec![
+            format!(
+                "Detected {} phases from {} entities",
+                total, result.total_entities
+            ),
+            format!(
+                "Weights: content={:.2}, neighborhood={:.2}, temporal={:.2}",
+                result.weights_used.content,
+                result.weights_used.neighborhood,
+                result.weights_used.temporal
+            ),
+        ];
+
+        if result.entities_without_embeddings > 0 {
+            hints.push(format!(
+                "{} entities lack embeddings - run backfill_embeddings",
+                result.entities_without_embeddings
+            ));
+        }
+        if result.entities_without_temporal_anchor > 0 {
+            hints.push(format!(
+                "{} entities have no event anchor (clustered by content only)",
+                result.entities_without_temporal_anchor
+            ));
+        }
+        if save {
+            hints.push(
+                "Phases saved to database — use load_phases to retrieve instantly".to_string(),
+            );
+        }
+
+        Ok(QueryResponse {
+            results: entity_results,
+            total,
+            next_cursor: None,
+            hints,
+            token_estimate,
+            truncated: None,
+        })
+    }
+
+    pub(crate) async fn handle_load_phases(&self) -> Result<QueryResponse, String> {
+        use crate::services::TemporalService;
+
+        let service = TemporalService::new(self.db.clone());
+        let saved = service
+            .load_phases()
+            .await
+            .map_err(|e| format!("Failed to load phases: {}", e))?;
+
+        match saved {
+            None => Ok(QueryResponse {
+                results: vec![],
+                total: 0,
+                next_cursor: None,
+                hints: vec![
+                    "No saved phases found. Use detect_phases with save=true to persist phases."
+                        .to_string(),
+                ],
+                token_estimate: 0,
+                truncated: None,
+            }),
+            Some(result) => {
+                let entity_results: Vec<EntityResult> = result
+                    .phases
+                    .iter()
+                    .map(|phase| {
+                        let type_breakdown: String = phase
+                            .entity_type_counts
+                            .iter()
+                            .map(|(t, c)| format!("{} {}", c, t))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+
+                        let seq_info = phase
+                            .sequence_range
+                            .map(|(min, max)| format!(" | timeline: {}-{}", min, max))
+                            .unwrap_or_default();
+
+                        let member_list: String = phase
+                            .members
+                            .iter()
+                            .take(5)
+                            .map(|m| format!("{} ({})", m.name, m.entity_type))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+
+                        let content = format!(
+                            "{} members ({}){}{}",
+                            phase.member_count,
+                            type_breakdown,
+                            seq_info,
+                            if phase.members.len() > 5 {
+                                format!(
+                                    "\nTop members: {} ... and {} more",
+                                    member_list,
+                                    phase.members.len() - 5
+                                )
+                            } else {
+                                format!("\nMembers: {}", member_list)
+                            }
+                        );
+
+                        EntityResult {
+                            id: format!("phase:phase_{}", phase.phase_id),
+                            entity_type: "narrative_phase".to_string(),
+                            name: format!("Phase {}: {}", phase.phase_id, phase.label),
+                            content,
+                            confidence: None,
+                            last_modified: None,
+                        }
+                    })
+                    .collect();
+
+                let total = entity_results.len();
+                let token_estimate = entity_results
+                    .iter()
+                    .map(|r| r.content.len() / 4 + 30)
+                    .sum();
+
+                Ok(QueryResponse {
+                    results: entity_results,
+                    total,
+                    next_cursor: None,
+                    hints: vec![format!(
+                        "Loaded {} saved phases (use clear_phases to remove)",
+                        total
+                    )],
+                    token_estimate,
+                    truncated: None,
+                })
+            }
+        }
+    }
+
+    pub(crate) async fn handle_detect_transitions(
+        &self,
+        entity_types: Option<Vec<String>>,
+        num_phases: Option<usize>,
+        content_weight: Option<f32>,
+        neighborhood_weight: Option<f32>,
+        temporal_weight: Option<f32>,
+    ) -> Result<QueryResponse, String> {
+        use crate::services::{PhaseWeights, TemporalService};
+
+        let type_filter = {
+            let parsed = parse_entity_types(entity_types);
+            if parsed.is_empty() {
+                EntityType::embeddable()
+            } else {
+                parsed
+            }
+        };
+
+        let weights = if content_weight.is_some()
+            || neighborhood_weight.is_some()
+            || temporal_weight.is_some()
+        {
+            Some(PhaseWeights {
+                content: content_weight.unwrap_or(0.6),
+                neighborhood: neighborhood_weight.unwrap_or(0.25),
+                temporal: temporal_weight.unwrap_or(0.15),
+            })
+        } else {
+            None
+        };
+
+        let service = TemporalService::new(self.db.clone());
+        let result = service
+            .detect_transitions(type_filter, num_phases, weights)
+            .await
+            .map_err(|e| format!("Transition analysis failed: {}", e))?;
+
+        let entity_results: Vec<EntityResult> = result
+            .transitions
+            .iter()
+            .map(|t| {
+                let phase_list = t
+                    .phase_labels
+                    .iter()
+                    .enumerate()
+                    .map(|(i, label)| format!("Phase {}: {}", t.phase_ids[i], label))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+
+                let span_info = t
+                    .sequence_span
+                    .map(|s| format!(" | sequence span: {:.0}", s))
+                    .unwrap_or_default();
+
+                let content = format!(
+                    "Bridges {} phases: [{}]{} | strength: {:.3}",
+                    t.phase_ids.len(),
+                    phase_list,
+                    span_info,
+                    t.bridge_strength
+                );
+
+                EntityResult {
+                    id: t.entity_id.clone(),
+                    entity_type: t.entity_type.clone(),
+                    name: t.name.clone(),
+                    content,
+                    confidence: Some(t.bridge_strength),
+                    last_modified: None,
+                }
+            })
+            .collect();
+
+        let total = entity_results.len();
+        let token_estimate = entity_results
+            .iter()
+            .map(|r| r.content.len() / 4 + 30)
+            .sum();
+
+        let mut hints = vec![
+            format!(
+                "{} bridge entities across {} phases",
+                result.total_bridge_entities, result.phases_analyzed
+            ),
+            "Bridge entities connect narrative arcs — they appear in 2+ phases".to_string(),
+        ];
+
+        if !result.phase_connections.is_empty() {
+            let connections: String = result
+                .phase_connections
+                .iter()
+                .take(5)
+                .map(|(a, b, count)| format!("Phase {}↔{}: {} bridges", a, b, count))
+                .collect::<Vec<_>>()
+                .join(", ");
+            hints.push(format!("Phase connections: {}", connections));
+        }
+
+        Ok(QueryResponse {
+            results: entity_results,
+            total,
+            next_cursor: None,
+            hints,
+            token_estimate,
+            truncated: None,
+        })
+    }
+
+    pub(crate) async fn handle_query_around(
+        &self,
+        anchor_id: &str,
+        entity_types: Option<Vec<String>>,
+        limit: usize,
+    ) -> Result<QueryResponse, String> {
+        use crate::services::TemporalService;
+
+        let type_filter = {
+            let parsed = parse_entity_types(entity_types);
+            if parsed.is_empty() {
+                EntityType::embeddable()
+            } else {
+                parsed
+            }
+        };
+
+        let service = TemporalService::new(self.db.clone());
+        let result = service
+            .query_around(anchor_id, type_filter, limit)
+            .await
+            .map_err(|e| format!("Query around failed: {}", e))?;
+
+        let entity_results: Vec<EntityResult> = result
+            .neighbors
+            .iter()
+            .map(|n| {
+                let mut details = vec![format!("similarity: {:.4}", n.similarity)];
+                if n.shared_scenes > 0 {
+                    details.push(format!("{} shared scenes", n.shared_scenes));
+                }
+                if let Some(dist) = n.sequence_distance {
+                    details.push(format!("timeline distance: {:.2}", dist));
+                }
+
+                EntityResult {
+                    id: n.entity_id.clone(),
+                    entity_type: n.entity_type.clone(),
+                    name: n.name.clone(),
+                    content: details.join(" | "),
+                    confidence: Some(n.similarity),
+                    last_modified: None,
+                }
+            })
+            .collect();
+
+        let total = entity_results.len();
+        let token_estimate = entity_results
+            .iter()
+            .map(|r| r.content.len() / 4 + 30)
+            .sum();
+
+        let phase_info = if result.anchor_phases.is_empty() {
+            "no phase assignment".to_string()
+        } else {
+            format!(
+                "phase(s): {}",
+                result
+                    .anchor_phases
+                    .iter()
+                    .map(|p| p.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        };
+
+        let hints = vec![
+            format!(
+                "Anchor: {} ({}) - {}",
+                result.anchor.name, result.anchor.entity_id, phase_info
+            ),
+            format!("Found {} narrative neighbors", total),
+            "Similarity combines embedding closeness, scene co-occurrence, and timeline proximity"
+                .to_string(),
+        ];
+
+        Ok(QueryResponse {
+            results: entity_results,
+            total,
+            next_cursor: None,
+            hints,
+            token_estimate,
+            truncated: None,
         })
     }
 }

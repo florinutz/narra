@@ -8,6 +8,7 @@ pub mod knowledge_handler;
 pub mod mutate_handler;
 pub mod path_handler;
 pub mod perception_handler;
+pub mod phase_handler;
 pub mod query_handler;
 pub mod session4_handler;
 pub mod session_handler;

@@ -302,9 +302,33 @@ impl CompositeIntelligenceService {
     ///
     /// Combines irony, conflicts, tensions, and thematic clustering into one view.
     pub async fn situation_report(&self) -> Result<SituationReport, NarraError> {
-        // 1. Irony highlights
         let irony_service = IronyService::new(self.db.clone());
-        let irony_report = irony_service.generate_report(None, 3).await?;
+        let clustering_service = ClusteringService::new(self.db.clone());
+
+        // Run all 7 async queries in parallel
+        let (
+            irony_result,
+            conflicts_result,
+            tension_result,
+            theme_result,
+            narrative_momentum,
+            unresolved_threads,
+            character_arc_summaries,
+        ) = tokio::join!(
+            irony_service.generate_report(None, 3),
+            find_knowledge_conflicts(&self.db),
+            self.query_tension_pairs(7, 10),
+            clustering_service.discover_themes(
+                vec![EntityType::Character, EntityType::Event, EntityType::Scene],
+                Some(5),
+            ),
+            self.compute_narrative_momentum(),
+            self.find_unresolved_threads(),
+            self.summarize_character_arcs(5),
+        );
+
+        // Process irony results
+        let irony_report = irony_result?;
         let mut irony_highlights = irony_report.asymmetries;
         irony_highlights.sort_by(|a, b| {
             b.dramatic_weight
@@ -313,8 +337,8 @@ impl CompositeIntelligenceService {
         });
         irony_highlights.truncate(5);
 
-        // 2. Knowledge conflicts
-        let raw_conflicts = find_knowledge_conflicts(&self.db).await?;
+        // Process conflicts
+        let raw_conflicts = conflicts_result?;
         let mut knowledge_conflicts = Vec::new();
         for conflict in &raw_conflicts {
             for state in &conflict.conflicting_states {
@@ -331,37 +355,15 @@ impl CompositeIntelligenceService {
             }
         }
 
-        // 3. High-tension pairs (tension >= 7)
-        let high_tension_pairs = self.query_tension_pairs(7, 10).await?;
+        let high_tension_pairs = tension_result?;
+        let theme_count = theme_result.map(|r| r.clusters.len()).unwrap_or(0);
 
-        // 4. Theme count
-        let clustering_service = ClusteringService::new(self.db.clone());
-        let theme_count = match clustering_service
-            .discover_themes(
-                vec![EntityType::Character, EntityType::Event, EntityType::Scene],
-                Some(5),
-            )
-            .await
-        {
-            Ok(result) => result.clusters.len(),
-            Err(_) => 0,
-        };
-
-        // 5. Generate suggestions
+        // Suggestions depend on irony, conflicts, tensions
         let suggestions = generate_situation_suggestions(
             &irony_highlights,
             &knowledge_conflicts,
             &high_tension_pairs,
         );
-
-        // 6. Narrative momentum
-        let narrative_momentum = self.compute_narrative_momentum().await;
-
-        // 7. Unresolved threads
-        let unresolved_threads = self.find_unresolved_threads().await;
-
-        // 8. Character arc summaries
-        let character_arc_summaries = self.summarize_character_arcs(5).await;
 
         Ok(SituationReport {
             irony_highlights,
@@ -382,43 +384,55 @@ impl CompositeIntelligenceService {
     ) -> Result<CharacterDossier, NarraError> {
         let full_id = normalize_character_id(character_id);
 
-        // 1. Basic info
-        let (name, roles) = self.fetch_character_info(&full_id).await?;
-
-        // 2. Centrality rank
         let analytics = GraphAnalyticsService::new(self.db.clone());
-        let centrality_rank = match analytics
-            .compute_centrality(None, vec![CentralityMetric::Degree], 100)
-            .await
-        {
-            Ok(results) => results
+        let influence_service = InfluenceService::new(self.db.clone());
+        let irony_service = IronyService::new(self.db.clone());
+
+        // Run all 9 async queries in parallel
+        let (
+            char_info_result,
+            centrality_result,
+            influence_result,
+            irony_result,
+            false_beliefs_result,
+            perceptions_result,
+            arc_trajectory,
+            relationship_map,
+            knowledge_inventory,
+        ) = tokio::join!(
+            self.fetch_character_info(&full_id),
+            analytics.compute_centrality(None, vec![CentralityMetric::Degree], 100),
+            influence_service.trace_propagation(&full_id, 3),
+            irony_service.generate_report(Some(&full_id), 0),
+            self.count_false_beliefs(&full_id),
+            self.fetch_perceptions_about(&full_id, 5),
+            self.compute_arc_trajectory(&full_id),
+            self.build_relationship_map(&full_id),
+            self.build_knowledge_inventory(&full_id),
+        );
+
+        // Extract results — char_info is the only hard error
+        let (name, roles) = char_info_result?;
+
+        let centrality_rank = centrality_result.ok().and_then(|results| {
+            results
                 .iter()
                 .position(|r| r.character_id == full_id)
-                .map(|p| p + 1),
-            Err(_) => None,
-        };
+                .map(|p| p + 1)
+        });
 
-        // 3. Influence reach
-        let influence_service = InfluenceService::new(self.db.clone());
-        let influence_reach = match influence_service.trace_propagation(&full_id, 3).await {
-            Ok(result) => result.reachable_characters.len(),
-            Err(_) => 0,
-        };
+        let influence_reach = influence_result
+            .map(|r| r.reachable_characters.len())
+            .unwrap_or(0);
 
-        // 4. Irony report for this character
-        let irony_service = IronyService::new(self.db.clone());
-        let irony_report = match irony_service.generate_report(Some(&full_id), 0).await {
-            Ok(r) => r,
-            Err(_) => crate::services::IronyReport {
-                focus: full_id.clone(),
-                asymmetries: vec![],
-                total_asymmetries: 0,
-                high_signal_count: 0,
-                narrative_opportunities: vec![],
-            },
-        };
+        let irony_report = irony_result.unwrap_or_else(|_| crate::services::IronyReport {
+            focus: full_id.clone(),
+            asymmetries: vec![],
+            total_asymmetries: 0,
+            high_signal_count: 0,
+            narrative_opportunities: vec![],
+        });
 
-        // Count advantages (this character knows, others don't) and blind spots (others know, this doesn't)
         let knowledge_advantages = irony_report
             .asymmetries
             .iter()
@@ -430,13 +444,10 @@ impl CompositeIntelligenceService {
             .filter(|a| a.unknowing_character_id == full_id)
             .count();
 
-        // 5. False beliefs count
-        let false_beliefs = self.count_false_beliefs(&full_id).await?;
+        let false_beliefs = false_beliefs_result?;
+        let (avg_tension, key_perceptions) = perceptions_result?;
 
-        // 6. Perceptions about this character
-        let (avg_tension, key_perceptions) = self.fetch_perceptions_about(&full_id, 5).await?;
-
-        // 7. Suggestions
+        // Suggestions depend on the above results
         let suggestions = generate_dossier_suggestions(
             &name,
             centrality_rank,
@@ -446,15 +457,6 @@ impl CompositeIntelligenceService {
             false_beliefs,
             &key_perceptions,
         );
-
-        // 8. Arc trajectory
-        let arc_trajectory = self.compute_arc_trajectory(&full_id).await;
-
-        // 9. Relationship map
-        let relationship_map = self.build_relationship_map(&full_id).await;
-
-        // 10. Knowledge inventory
-        let knowledge_inventory = self.build_knowledge_inventory(&full_id).await;
 
         Ok(CharacterDossier {
             name,
@@ -480,73 +482,76 @@ impl CompositeIntelligenceService {
             .map(|id| normalize_character_id(id))
             .collect();
 
-        let irony_service = IronyService::new(self.db.clone());
+        // Build pair futures for parallel execution
+        let mut pair_futures = Vec::new();
+        for i in 0..normalized.len() {
+            for j in (i + 1)..normalized.len() {
+                let a = normalized[i].clone();
+                let b = normalized[j].clone();
+                let db = self.db.clone();
+                let irony_svc = IronyService::new(self.db.clone());
 
+                pair_futures.push(async move {
+                    let asymmetries: Vec<KnowledgeAsymmetry> = irony_svc
+                        .detect_asymmetries(&a, &b)
+                        .await
+                        .unwrap_or_default();
+                    let (tension, feelings) = fetch_pair_tension_standalone(&db, &a, &b).await;
+                    let shared = count_shared_scenes_standalone(&db, &a, &b).await;
+                    (a, b, asymmetries, tension, feelings, shared)
+                });
+            }
+        }
+
+        // Run all pair queries + fact queries in parallel
+        let (pair_results, applicable_facts, fact_constraints) = tokio::join!(
+            futures::future::join_all(pair_futures),
+            self.fetch_applicable_facts(&normalized),
+            self.fetch_fact_constraints(&normalized),
+        );
+        let applicable_facts = applicable_facts?;
+
+        // Aggregate pair results
         let mut pair_dynamics = Vec::new();
         let mut total_irony = 0usize;
         let mut highest_tension: Option<(String, String, i32)> = None;
         let mut total_shared = 0usize;
         let mut all_asymmetries = Vec::new();
 
-        // For each pair
-        for i in 0..normalized.len() {
-            for j in (i + 1)..normalized.len() {
-                let a = &normalized[i];
-                let b = &normalized[j];
+        for (a, b, asymmetries, tension, feelings, shared) in pair_results {
+            let asym_count = asymmetries.len();
+            total_irony += asym_count;
+            all_asymmetries.extend(asymmetries);
 
-                // Asymmetries
-                let asymmetries: Vec<KnowledgeAsymmetry> = irony_service
-                    .detect_asymmetries(a, b)
-                    .await
-                    .unwrap_or_default();
-                let asym_count = asymmetries.len();
-                total_irony += asym_count;
-
-                // Store asymmetries for knowledge reveals
-                all_asymmetries.extend(asymmetries);
-
-                // Tension and feelings from perceives edge
-                let (tension, feelings) = self.fetch_pair_tension(a, b).await;
-
-                // Track highest tension
-                if let Some(t) = tension {
-                    match &highest_tension {
-                        Some((_, _, current)) if t > *current => {
-                            highest_tension = Some((a.clone(), b.clone(), t));
-                        }
-                        None => {
-                            highest_tension = Some((a.clone(), b.clone(), t));
-                        }
-                        _ => {}
+            if let Some(t) = tension {
+                match &highest_tension {
+                    Some((_, _, current)) if t > *current => {
+                        highest_tension = Some((a.clone(), b.clone(), t));
                     }
+                    None => {
+                        highest_tension = Some((a.clone(), b.clone(), t));
+                    }
+                    _ => {}
                 }
-
-                // Shared scenes
-                let shared = self.count_shared_scenes(a, b).await;
-                total_shared += shared;
-
-                pair_dynamics.push(PairDynamic {
-                    character_a: a.clone(),
-                    character_b: b.clone(),
-                    asymmetries: asym_count,
-                    tension_level: tension,
-                    feelings,
-                    shared_scene_count: shared,
-                });
             }
-        }
 
-        // Applicable facts
-        let applicable_facts = self.fetch_applicable_facts(&normalized).await?;
+            total_shared += shared;
+
+            pair_dynamics.push(PairDynamic {
+                character_a: a,
+                character_b: b,
+                asymmetries: asym_count,
+                tension_level: tension,
+                feelings,
+                shared_scene_count: shared,
+            });
+        }
 
         // Opportunities
         let opportunities = generate_scene_opportunities(&pair_dynamics, &applicable_facts);
 
         // Knowledge reveals from asymmetries
         let knowledge_reveals = self.generate_knowledge_reveals(&all_asymmetries);
-
-        // Fact constraints
-        let fact_constraints = self.fetch_fact_constraints(&normalized).await;
 
         Ok(ScenePlan {
             characters: normalized,
@@ -682,50 +687,6 @@ impl CompositeIntelligenceService {
         Ok((avg, perceptions))
     }
 
-    async fn fetch_pair_tension(&self, a: &str, b: &str) -> (Option<i32>, Option<String>) {
-        // Check both directions, take the higher tension
-        let query = format!(
-            "SELECT tension_level, feelings FROM perceives \
-             WHERE (in = {} AND out = {}) OR (in = {} AND out = {}) \
-             ORDER BY tension_level DESC LIMIT 1",
-            a, b, b, a
-        );
-
-        #[derive(serde::Deserialize)]
-        struct PairRow {
-            tension_level: Option<i32>,
-            feelings: Option<String>,
-        }
-
-        match self.db.query(&query).await {
-            Ok(mut r) => {
-                let row: Option<PairRow> = r.take(0).unwrap_or(None);
-                match row {
-                    Some(pr) => (pr.tension_level, pr.feelings),
-                    None => (None, None),
-                }
-            }
-            Err(_) => (None, None),
-        }
-    }
-
-    async fn count_shared_scenes(&self, a: &str, b: &str) -> usize {
-        let query = format!(
-            "SELECT count() AS count FROM (SELECT out FROM participates_in WHERE in = {}) \
-             WHERE out IN (SELECT VALUE out FROM participates_in WHERE in = {}) \
-             GROUP ALL",
-            a, b
-        );
-
-        match self.db.query(&query).await {
-            Ok(mut r) => {
-                let row: Option<KnowledgeCountRow> = r.take(0).unwrap_or(None);
-                row.map(|r| r.count).unwrap_or(0)
-            }
-            Err(_) => 0,
-        }
-    }
-
     async fn fetch_applicable_facts(
         &self,
         character_ids: &[String],
@@ -734,18 +695,17 @@ impl CompositeIntelligenceService {
             return Ok(vec![]);
         }
 
-        // Build an array of character IDs for the query
-        let id_list: Vec<String> = character_ids.iter().map(|id| id.to_string()).collect();
-        let array_str = id_list.join(", ");
-        let query = format!(
-            "SELECT title FROM universe_fact \
-             WHERE id IN (SELECT VALUE fact FROM fact_applies WHERE entity IN [{}])",
-            array_str
-        );
+        let record_ids: Vec<surrealdb::RecordId> = character_ids
+            .iter()
+            .map(|id| surrealdb::RecordId::from(id.split_once(':').unwrap_or(("character", id))))
+            .collect();
+        let query = "SELECT title FROM universe_fact \
+             WHERE id IN (SELECT VALUE fact FROM fact_applies WHERE entity IN $ids)";
 
         let mut result = self
             .db
-            .query(&query)
+            .query(query)
+            .bind(("ids", record_ids))
             .await
             .map_err(|e| NarraError::Database(e.to_string()))?;
 
@@ -755,8 +715,7 @@ impl CompositeIntelligenceService {
 
     /// Compute narrative momentum based on arc snapshot activity and tension levels.
     async fn compute_narrative_momentum(&self) -> NarrativeMomentum {
-        // Query arc snapshots from last 30 days vs previous 30 days
-        let query = "SELECT \
+        let snapshot_query = "SELECT \
             count() AS count, \
             count() FILTER created_at >= time::now() - 30d AS recent_count, \
             count() FILTER created_at < time::now() - 30d AND created_at >= time::now() - 60d AS old_count \
@@ -764,15 +723,6 @@ impl CompositeIntelligenceService {
             WHERE entity_type = 'character' \
             GROUP ALL";
 
-        let snapshot_activity = match self.db.query(query).await {
-            Ok(mut r) => {
-                let row: Option<ArcSnapshotCountRow> = r.take(0).unwrap_or(None);
-                row
-            }
-            Err(_) => None,
-        };
-
-        // Query average tension level
         let tension_query = "SELECT math::mean(tension_level) AS avg_tension \
             FROM perceives \
             WHERE tension_level IS NOT NONE \
@@ -783,13 +733,27 @@ impl CompositeIntelligenceService {
             avg_tension: Option<f32>,
         }
 
-        let avg_tension = match self.db.query(tension_query).await {
-            Ok(mut r) => {
-                let row: Option<AvgTensionRow> = r.take(0).unwrap_or(None);
-                row.and_then(|r| r.avg_tension)
-            }
-            Err(_) => None,
-        };
+        // Run both queries in parallel
+        let (snapshot_activity, avg_tension) = tokio::join!(
+            async {
+                match self.db.query(snapshot_query).await {
+                    Ok(mut r) => {
+                        let row: Option<ArcSnapshotCountRow> = r.take(0).unwrap_or(None);
+                        row
+                    }
+                    Err(_) => None,
+                }
+            },
+            async {
+                match self.db.query(tension_query).await {
+                    Ok(mut r) => {
+                        let row: Option<AvgTensionRow> = r.take(0).unwrap_or(None);
+                        row.and_then(|r| r.avg_tension)
+                    }
+                    Err(_) => None,
+                }
+            },
+        );
 
         // Determine momentum
         match (snapshot_activity, avg_tension) {
@@ -819,9 +783,6 @@ impl CompositeIntelligenceService {
 
     /// Find unresolved narrative threads.
     async fn find_unresolved_threads(&self) -> Vec<UnresolvedThread> {
-        let mut threads = Vec::new();
-
-        // 1. Secrets (knowledge where only 1 character knows)
         let secrets_query = "SELECT out AS target, in AS character_id, out AS fact \
             FROM knows \
             WHERE certainty = 'Knows' \
@@ -829,7 +790,36 @@ impl CompositeIntelligenceService {
             HAVING count() = 1 \
             LIMIT 5";
 
-        if let Ok(mut result) = self.db.query(secrets_query).await {
+        let tensions_query =
+            "SELECT type::string(in) AS observer, type::string(out) AS target, tension_level \
+            FROM perceives \
+            WHERE tension_level >= 7 \
+            ORDER BY tension_level DESC \
+            LIMIT 5";
+
+        let false_beliefs_query =
+            "SELECT type::string(in) AS character_id, type::string(out) AS target \
+            FROM knows \
+            WHERE certainty = 'BelievesWrongly' \
+            LIMIT 5";
+
+        let stale_arcs_query = "SELECT id AS character_id, name AS character_name \
+            FROM character \
+            WHERE id NOT IN (SELECT VALUE entity_id FROM arc_snapshot WHERE created_at >= time::now() - 30d) \
+            LIMIT 5";
+
+        // Run all four queries in parallel
+        let (secrets_result, tensions_result, false_beliefs_result, stale_arcs_result) = tokio::join!(
+            self.db.query(secrets_query),
+            self.db.query(tensions_query),
+            self.db.query(false_beliefs_query),
+            self.db.query(stale_arcs_query),
+        );
+
+        let mut threads = Vec::new();
+
+        // 1. Secrets (knowledge where only 1 character knows)
+        if let Ok(mut result) = secrets_result {
             let rows: Vec<SecretTargetRow> = result.take(0).unwrap_or_default();
             for row in rows {
                 threads.push(UnresolvedThread {
@@ -852,14 +842,7 @@ impl CompositeIntelligenceService {
         }
 
         // 2. High tensions (tension_level >= 7)
-        let tensions_query =
-            "SELECT type::string(in) AS observer, type::string(out) AS target, tension_level \
-            FROM perceives \
-            WHERE tension_level >= 7 \
-            ORDER BY tension_level DESC \
-            LIMIT 5";
-
-        if let Ok(mut result) = self.db.query(tensions_query).await {
+        if let Ok(mut result) = tensions_result {
             let rows: Vec<HighTensionRow> = result.take(0).unwrap_or_default();
             for row in rows {
                 threads.push(UnresolvedThread {
@@ -883,13 +866,7 @@ impl CompositeIntelligenceService {
         }
 
         // 3. False beliefs
-        let false_beliefs_query =
-            "SELECT type::string(in) AS character_id, type::string(out) AS target \
-            FROM knows \
-            WHERE certainty = 'BelievesWrongly' \
-            LIMIT 5";
-
-        if let Ok(mut result) = self.db.query(false_beliefs_query).await {
+        if let Ok(mut result) = false_beliefs_result {
             let rows: Vec<FalseBeliefRow> = result.take(0).unwrap_or_default();
             for row in rows {
                 threads.push(UnresolvedThread {
@@ -912,12 +889,7 @@ impl CompositeIntelligenceService {
         }
 
         // 4. Stale arcs (characters with NO arc_snapshot in 30+ days)
-        let stale_arcs_query = "SELECT id AS character_id, name AS character_name \
-            FROM character \
-            WHERE id NOT IN (SELECT VALUE entity_id FROM arc_snapshot WHERE created_at >= time::now() - 30d) \
-            LIMIT 5";
-
-        if let Ok(mut result) = self.db.query(stale_arcs_query).await {
+        if let Ok(mut result) = stale_arcs_result {
             let rows: Vec<StaleArcRow> = result.take(0).unwrap_or_default();
             for row in rows {
                 threads.push(UnresolvedThread {
@@ -1046,38 +1018,49 @@ impl CompositeIntelligenceService {
             Err(_) => return vec![],
         };
 
-        let mut briefs = Vec::new();
-        for rel in relationships {
-            // Query tension for this pair
-            let tension_query = format!(
-                "SELECT tension_level FROM perceives \
-                WHERE (in = {} AND out = {}) OR (in = {} AND out = {}) \
-                ORDER BY tension_level DESC LIMIT 1",
-                full_id, rel.other_character, rel.other_character, full_id
-            );
+        // Query tension for all relationships in parallel
+        let full_id_owned = full_id.to_string();
+        let tension_futures: Vec<_> = relationships
+            .iter()
+            .map(|rel| {
+                let db = self.db.clone();
+                let fid = full_id_owned.clone();
+                let other = rel.other_character.clone();
+                async move {
+                    #[derive(serde::Deserialize)]
+                    struct TensionOnlyRow {
+                        tension_level: Option<i32>,
+                    }
 
-            #[derive(serde::Deserialize)]
-            struct TensionOnlyRow {
-                tension_level: Option<i32>,
-            }
-
-            let tension = match self.db.query(&tension_query).await {
-                Ok(mut r) => {
-                    let row: Option<TensionOnlyRow> = r.take(0).unwrap_or(None);
-                    row.and_then(|t| t.tension_level)
+                    let tension_query = format!(
+                        "SELECT tension_level FROM perceives \
+                        WHERE (in = {} AND out = {}) OR (in = {} AND out = {}) \
+                        ORDER BY tension_level DESC LIMIT 1",
+                        fid, other, other, fid
+                    );
+                    match db.query(&tension_query).await {
+                        Ok(mut r) => {
+                            let row: Option<TensionOnlyRow> = r.take(0).unwrap_or(None);
+                            row.and_then(|t| t.tension_level)
+                        }
+                        Err(_) => None,
+                    }
                 }
-                Err(_) => None,
-            };
+            })
+            .collect();
 
-            briefs.push(RelationshipBrief {
+        let tensions = futures::future::join_all(tension_futures).await;
+
+        relationships
+            .into_iter()
+            .zip(tensions)
+            .map(|(rel, tension)| RelationshipBrief {
                 other_character: rel.other_character,
                 other_name: rel.other_name,
                 rel_type: rel.rel_type,
                 tension,
-            });
-        }
-
-        briefs
+            })
+            .collect()
     }
 
     /// Build knowledge inventory grouped by certainty level.
@@ -1151,16 +1134,15 @@ impl CompositeIntelligenceService {
             return vec![];
         }
 
-        let id_list: Vec<String> = character_ids.iter().map(|id| id.to_string()).collect();
-        let array_str = id_list.join(", ");
-        let query = format!(
-            "SELECT type::string(id) AS fact_id, title, enforcement_level \
+        let record_ids: Vec<surrealdb::RecordId> = character_ids
+            .iter()
+            .map(|id| surrealdb::RecordId::from(id.split_once(':').unwrap_or(("character", id))))
+            .collect();
+        let query = "SELECT type::string(id) AS fact_id, title, enforcement_level \
             FROM universe_fact \
-            WHERE id IN (SELECT VALUE fact FROM fact_applies WHERE entity IN [{}])",
-            array_str
-        );
+            WHERE id IN (SELECT VALUE fact FROM fact_applies WHERE entity IN $ids)";
 
-        let rows = match self.db.query(&query).await {
+        let rows = match self.db.query(query).bind(("ids", record_ids)).await {
             Ok(mut r) => {
                 let rows: Vec<FactConstraintRow> = r.take(0).unwrap_or_default();
                 rows
@@ -1176,6 +1158,62 @@ impl CompositeIntelligenceService {
                 relevance: "Applies to characters in this scene".to_string(),
             })
             .collect()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Standalone async helpers (used by scene_prep for parallel pair futures)
+// ---------------------------------------------------------------------------
+
+async fn fetch_pair_tension_standalone(
+    db: &NarraDb,
+    a: &str,
+    b: &str,
+) -> (Option<i32>, Option<String>) {
+    let query = format!(
+        "SELECT tension_level, feelings FROM perceives \
+         WHERE (in = {} AND out = {}) OR (in = {} AND out = {}) \
+         ORDER BY tension_level DESC LIMIT 1",
+        a, b, b, a
+    );
+
+    #[derive(serde::Deserialize)]
+    struct PairRow {
+        tension_level: Option<i32>,
+        feelings: Option<String>,
+    }
+
+    match db.query(&query).await {
+        Ok(mut r) => {
+            let row: Option<PairRow> = r.take(0).unwrap_or(None);
+            match row {
+                Some(pr) => (pr.tension_level, pr.feelings),
+                None => (None, None),
+            }
+        }
+        Err(_) => (None, None),
+    }
+}
+
+async fn count_shared_scenes_standalone(db: &NarraDb, a: &str, b: &str) -> usize {
+    let query = format!(
+        "SELECT count() AS count FROM (SELECT out FROM participates_in WHERE in = {}) \
+         WHERE out IN (SELECT VALUE out FROM participates_in WHERE in = {}) \
+         GROUP ALL",
+        a, b
+    );
+
+    #[derive(serde::Deserialize)]
+    struct CountRow {
+        count: usize,
+    }
+
+    match db.query(&query).await {
+        Ok(mut r) => {
+            let row: Option<CountRow> = r.take(0).unwrap_or(None);
+            row.map(|r| r.count).unwrap_or(0)
+        }
+        Err(_) => 0,
     }
 }
 

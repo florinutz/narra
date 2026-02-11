@@ -522,6 +522,7 @@ async fn test_arc_history_returns_chronological_snapshots() {
 
     let request = QueryRequest::ArcHistory {
         entity_id: alice_id.clone(),
+        facet: None,
         limit: Some(50),
     };
     let response = server
@@ -566,6 +567,7 @@ async fn test_arc_history_empty() {
 
     let request = QueryRequest::ArcHistory {
         entity_id: "character:nonexistent".to_string(),
+        facet: None,
         limit: None,
     };
     let response = server
@@ -613,6 +615,7 @@ async fn test_arc_history_limit() {
 
     let request = QueryRequest::ArcHistory {
         entity_id: alice_id,
+        facet: None,
         limit: Some(3),
     };
     let response = server
@@ -1405,6 +1408,7 @@ async fn test_full_arc_tracking_workflow() {
     let resp = server
         .handle_query(Parameters(to_query_input(QueryRequest::ArcHistory {
             entity_id: alice_id.clone(),
+            facet: None,
             limit: None,
         })))
         .await

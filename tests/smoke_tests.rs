@@ -9,7 +9,7 @@ use common::harness::TestHarness;
 use common::{to_mutation_input, to_query_input, to_session_input};
 use narra::mcp::tools::export::ExportRequest;
 use narra::mcp::tools::graph::GraphRequest;
-use narra::mcp::{MutationRequest, NarraServer, QueryRequest, SessionRequest};
+use narra::mcp::{KnowledgeSpec, MutationRequest, NarraServer, QueryRequest, SessionRequest};
 use rmcp::handler::server::wrapper::Parameters;
 
 /// Helper to create a character and return its ID.
@@ -337,4 +337,80 @@ async fn smoke_test_investigate_contradictions_via_query() {
         result.0.token_estimate > 0,
         "Response should have a token estimate"
     );
+}
+
+#[tokio::test]
+async fn smoke_test_batch_record_knowledge() {
+    let harness = TestHarness::new().await;
+    let server = common::create_test_server(&harness).await;
+
+    let char_id = create_test_character(&server, "Knowledge Batch Char").await;
+    let char_id2 = create_test_character(&server, "Knowledge Batch Char2").await;
+
+    let request = MutationRequest::BatchRecordKnowledge {
+        knowledge: vec![
+            KnowledgeSpec {
+                character_id: char_id.clone(),
+                target_id: char_id2.clone(),
+                fact: "They are allies".to_string(),
+                certainty: "knows".to_string(),
+                method: Some("initial".to_string()),
+                source_character_id: None,
+                event_id: None,
+            },
+            KnowledgeSpec {
+                character_id: char_id2,
+                target_id: char_id,
+                fact: "They are rivals".to_string(),
+                certainty: "suspects".to_string(),
+                method: Some("initial".to_string()),
+                source_character_id: None,
+                event_id: None,
+            },
+        ],
+    };
+
+    let result = server
+        .mutate(Parameters(to_mutation_input(request)))
+        .await
+        .expect("batch record knowledge should succeed");
+
+    assert_eq!(result.0.entity.entity_type, "batch");
+    let entities = result.0.entities.expect("Should have entities list");
+    assert_eq!(entities.len(), 2);
+}
+
+/// Test that structured errors are returned from the boundary methods.
+///
+/// The `query()` and `mutate()` methods return `ToolError` (not plain String)
+/// when handlers fail, with structured error_code and suggestion fields.
+#[tokio::test]
+async fn smoke_test_structured_error_from_query() {
+    let harness = TestHarness::new().await;
+    let server = common::create_test_server(&harness).await;
+
+    let request = QueryRequest::Lookup {
+        entity_id: "character:nonexistent_structured_err".to_string(),
+        detail_level: None,
+    };
+
+    // Use the boundary-level method (query, not handle_query) to test ToolError conversion
+    let result = server.query(Parameters(to_query_input(request))).await;
+    assert!(result.is_err(), "Lookup of nonexistent should fail");
+}
+
+#[tokio::test]
+async fn smoke_test_structured_error_from_mutate() {
+    let harness = TestHarness::new().await;
+    let server = common::create_test_server(&harness).await;
+
+    // Soft delete is not implemented — should return structured error
+    let char_id = create_test_character(&server, "Err Test Char").await;
+    let request = MutationRequest::Delete {
+        entity_id: char_id,
+        hard: Some(false),
+    };
+
+    let result = server.mutate(Parameters(to_mutation_input(request))).await;
+    assert!(result.is_err(), "Soft delete should fail");
 }

@@ -151,8 +151,8 @@ impl NarraServer {
                 "Backfill complete. Semantic search now available for {} entities.",
                 stats.embedded
             ),
-            "Use SemanticSearch to find entities by meaning".to_string(),
-            "Use HybridSearch to combine keyword and semantic search".to_string(),
+            "Use UnifiedSearch (mode: semantic) to find entities by meaning".to_string(),
+            "Use UnifiedSearch (mode: hybrid) to combine keyword and semantic search".to_string(),
         ];
 
         Ok(MutationResponse {

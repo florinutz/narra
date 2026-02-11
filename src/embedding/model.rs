@@ -58,6 +58,11 @@ impl LocalEmbeddingService {
         // Determine dimensions and model_id before moving config.model
         let (dimensions, model_id) = match config.model {
             EmbeddingModel::BGESmallENV15 => (384, "bge-small-en-v1.5".to_string()),
+            EmbeddingModel::BGEBaseENV15 => (768, "bge-base-en-v1.5".to_string()),
+            EmbeddingModel::BGELargeENV15 => (1024, "bge-large-en-v1.5".to_string()),
+            EmbeddingModel::BGESmallENV15Q => (384, "bge-small-en-v1.5-q".to_string()),
+            EmbeddingModel::BGEBaseENV15Q => (768, "bge-base-en-v1.5-q".to_string()),
+            EmbeddingModel::BGELargeENV15Q => (1024, "bge-large-en-v1.5-q".to_string()),
             _ => (384, format!("{:?}", config.model)),
         };
 
