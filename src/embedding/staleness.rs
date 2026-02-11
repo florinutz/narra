@@ -485,7 +485,7 @@ async fn regenerate_facet_embedding_internal(
                 },
                 async {
                     db.query(
-                        "SELECT out.fact AS fact, certainty FROM knows WHERE in = $ref \
+                        "SELECT out.fact AS fact, certainty, learned_at FROM knows WHERE in = $ref \
                          ORDER BY learned_at DESC LIMIT 20",
                     )
                     .bind(("ref", entity_ref.clone()))

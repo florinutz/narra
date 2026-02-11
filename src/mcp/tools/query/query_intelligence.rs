@@ -147,7 +147,7 @@ impl NarraServer {
 
         let knowledge_query = format!(
             "SELECT meta::id(out) AS target, certainty, out.fact AS fact, \
-             truth_value \
+             truth_value, learned_at \
              FROM knows WHERE in = {} ORDER BY learned_at DESC",
             character_id
         );
@@ -162,7 +162,7 @@ impl NarraServer {
 
         // Get all knowledge in the world (to find blind spots)
         let all_query = "SELECT meta::id(in) AS knower, meta::id(out) AS target, \
-                         certainty, out.fact AS fact \
+                         certainty, out.fact AS fact, learned_at \
                          FROM knows ORDER BY learned_at DESC";
         let mut resp = self
             .db

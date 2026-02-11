@@ -3,12 +3,12 @@
 //! Re-ranking sees query and document together (cross-encoder) rather than
 //! independently (bi-encoder), dramatically improving relevance ordering.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use async_trait::async_trait;
-use fastembed::{RerankInitOptions, RerankerModel, TextRerank};
 use tracing::warn;
 
+use crate::embedding::candle_backend::{download_model, select_device, CrossEncoderReranker};
 use crate::NarraError;
 
 /// Service trait for cross-encoder re-ranking.
@@ -27,9 +27,11 @@ pub trait RerankerService: Send + Sync {
     fn is_available(&self) -> bool;
 }
 
-/// Local cross-encoder reranker using fastembed.
+const RERANKER_REPO: &str = "BAAI/bge-reranker-base";
+
+/// Local cross-encoder reranker using candle.
 pub struct LocalRerankerService {
-    model: Option<Arc<Mutex<TextRerank>>>,
+    reranker: Option<Arc<CrossEncoderReranker>>,
     available: bool,
 }
 
@@ -42,17 +44,30 @@ impl Default for LocalRerankerService {
 impl LocalRerankerService {
     /// Create a new local reranker service.
     ///
-    /// Uses BGE-reranker-base by default. If model loading fails, the service
-    /// will be unavailable but won't error (graceful degradation).
+    /// Downloads and loads BGE-reranker-base via candle. If model loading fails,
+    /// the service will be unavailable but won't error (graceful degradation).
     pub fn new() -> Self {
-        let init_options = RerankInitOptions::new(RerankerModel::BGERerankerBase)
-            .with_show_download_progress(true);
+        let files = match download_model(RERANKER_REPO, None) {
+            Ok(files) => files,
+            Err(e) => {
+                warn!(
+                    "Failed to download reranker model: {}. Re-ranking will be unavailable.",
+                    e
+                );
+                return Self {
+                    reranker: None,
+                    available: false,
+                };
+            }
+        };
 
-        match TextRerank::try_new(init_options) {
-            Ok(model) => {
-                tracing::info!("Reranker model loaded (bge-reranker-base)");
+        let device = select_device();
+
+        match CrossEncoderReranker::new(&files, device) {
+            Ok(reranker) => {
+                tracing::info!("Reranker model loaded (bge-reranker-base via candle)");
                 Self {
-                    model: Some(Arc::new(Mutex::new(model))),
+                    reranker: Some(Arc::new(reranker)),
                     available: true,
                 }
             }
@@ -62,7 +77,7 @@ impl LocalRerankerService {
                     e
                 );
                 Self {
-                    model: None,
+                    reranker: None,
                     available: false,
                 }
             }
@@ -81,27 +96,26 @@ impl RerankerService for LocalRerankerService {
             return Ok(vec![]);
         }
 
-        let model = self
-            .model
+        let reranker = self
+            .reranker
             .as_ref()
             .ok_or_else(|| NarraError::Database("Reranker model not loaded".to_string()))?
             .clone();
 
-        let query = query.to_string();
-        let candidates = candidates.to_vec();
+        let pairs: Vec<(String, String)> = candidates
+            .iter()
+            .map(|c| (query.to_string(), c.clone()))
+            .collect();
 
         let result = tokio::task::spawn_blocking(move || {
-            let mut model_guard = model
-                .lock()
-                .map_err(|e| anyhow::anyhow!("Mutex lock failed: {}", e))?;
-            let results = model_guard.rerank(query, candidates.as_slice(), false, None)?;
-            Ok::<Vec<fastembed::RerankResult>, anyhow::Error>(results)
+            let scores = reranker.score_pairs(&pairs)?;
+            Ok::<Vec<f32>, anyhow::Error>(scores)
         })
         .await
         .map_err(|e| NarraError::Database(format!("Task join error: {}", e)))?
         .map_err(|e| NarraError::Database(format!("Rerank error: {}", e)))?;
 
-        let mut scored: Vec<(usize, f32)> = result.iter().map(|r| (r.index, r.score)).collect();
+        let mut scored: Vec<(usize, f32)> = result.into_iter().enumerate().collect();
         scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
         Ok(scored)

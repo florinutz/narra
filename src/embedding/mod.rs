@@ -1,10 +1,11 @@
 //! Embedding infrastructure for semantic search.
 //!
-//! This module provides text embedding capabilities using local models via fastembed.
+//! This module provides text embedding capabilities using local models via candle.
 //! The EmbeddingService trait abstracts embedding operations for swappability,
 //! while LocalEmbeddingService implements it using BGE-small-en-v1.5.
 
 pub mod backfill;
+pub mod candle_backend;
 pub mod composite;
 pub mod model;
 pub mod provider;
@@ -111,6 +112,6 @@ pub trait EmbeddingService: Send + Sync {
     /// Get the model identifier (e.g., "bge-small-en-v1.5").
     fn model_id(&self) -> &str;
 
-    /// Get the provider name (e.g., "fastembed", "openai", "noop").
+    /// Get the provider name (e.g., "candle", "openai", "noop").
     fn provider_name(&self) -> &str;
 }

@@ -29,9 +29,9 @@ use surrealdb::Datetime;
 ///
 /// Verifies: Backfill processes character, location, event, scene with correct dimensions
 ///
-/// Note: Requires real fastembed model (~50MB download on first run).
+/// Note: Requires real embedding model (~50MB download on first run).
 #[tokio::test]
-#[ignore = "Requires fastembed model download (run manually with --ignored)"]
+#[ignore = "Requires model download (run manually with --ignored)"]
 async fn test_backfill_generates_embeddings_for_all_types() {
     let harness = TestHarness::new().await;
 
@@ -223,9 +223,9 @@ async fn test_backfill_generates_embeddings_for_all_types() {
 ///
 /// Verifies: Backfill skips entities with valid embeddings
 ///
-/// Note: Requires real fastembed model (~50MB download on first run).
+/// Note: Requires real embedding model (~50MB download on first run).
 #[tokio::test]
-#[ignore = "Requires fastembed model download (run manually with --ignored)"]
+#[ignore = "Requires model download (run manually with --ignored)"]
 async fn test_backfill_is_idempotent() {
     let harness = TestHarness::new().await;
 
@@ -308,9 +308,9 @@ async fn test_backfill_is_idempotent() {
 ///
 /// Verifies: Mutation marks embeddings stale, backfill regenerates them
 ///
-/// Note: Requires real fastembed model (~50MB download on first run).
+/// Note: Requires real embedding model (~50MB download on first run).
 #[tokio::test]
-#[ignore = "Requires fastembed model download (run manually with --ignored)"]
+#[ignore = "Requires model download (run manually with --ignored)"]
 async fn test_staleness_marking_on_update() {
     let harness = TestHarness::new().await;
 
@@ -437,7 +437,7 @@ async fn test_staleness_marking_on_update() {
     );
 
     // Verify embedding differs (text changed, so embedding should change)
-    // Note: We can't compare exact vectors since fastembed is deterministic but the text is different
+    // Note: We can't compare exact vectors since the embedding model is deterministic but the text is different
     assert_ne!(
         &embedding_before, embedding_after,
         "Embedding should differ after text change and re-embedding"
@@ -450,9 +450,9 @@ async fn test_staleness_marking_on_update() {
 ///
 /// Verifies: backfill_type processes only the specified type
 ///
-/// Note: Requires real fastembed model (~50MB download on first run).
+/// Note: Requires real embedding model (~50MB download on first run).
 #[tokio::test]
-#[ignore = "Requires fastembed model download (run manually with --ignored)"]
+#[ignore = "Requires model download (run manually with --ignored)"]
 async fn test_backfill_single_type() {
     let harness = TestHarness::new().await;
 

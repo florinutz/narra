@@ -1,7 +1,7 @@
 //! Embedding provider configuration and factory.
 //!
 //! Supports multiple embedding backends via a tagged enum configuration.
-//! Default is local fastembed (BGE-small-en-v1.5). API providers available
+//! Default is local candle (BGE-small-en-v1.5). API providers available
 //! behind the `api-embeddings` feature flag.
 
 use std::path::Path;
@@ -20,10 +20,11 @@ use crate::NarraError;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "provider", rename_all = "snake_case")]
 pub enum EmbeddingProviderConfig {
-    /// Local fastembed model (default).
-    Local {
+    /// Local candle model (default).
+    #[serde(alias = "local")]
+    Candle {
         /// Model name (default: "bge-small-en-v1.5")
-        #[serde(default = "default_local_model")]
+        #[serde(default = "default_candle_model")]
         model: String,
         /// Cache directory for model files
         #[serde(default)]
@@ -36,7 +37,7 @@ pub enum EmbeddingProviderConfig {
     // Gated behind `api-embeddings` feature flag.
 }
 
-fn default_local_model() -> String {
+fn default_candle_model() -> String {
     "bge-small-en-v1.5".to_string()
 }
 
@@ -46,8 +47,8 @@ fn default_true() -> bool {
 
 impl Default for EmbeddingProviderConfig {
     fn default() -> Self {
-        Self::Local {
-            model: default_local_model(),
+        Self::Candle {
+            model: default_candle_model(),
             cache_dir: None,
             show_download_progress: true,
         }
@@ -77,6 +78,19 @@ pub enum ModelMatch {
         current_model: String,
         current_dimensions: usize,
     },
+}
+
+/// Map model short name to (HuggingFace repo ID, dimensions).
+fn resolve_model(name: &str) -> Result<(&str, usize), NarraError> {
+    match name {
+        "bge-small-en-v1.5" => Ok(("BAAI/bge-small-en-v1.5", 384)),
+        "bge-base-en-v1.5" => Ok(("BAAI/bge-base-en-v1.5", 768)),
+        "bge-large-en-v1.5" => Ok(("BAAI/bge-large-en-v1.5", 1024)),
+        other => Err(NarraError::Database(format!(
+            "Unknown embedding model: '{}'. Supported: bge-small-en-v1.5, bge-base-en-v1.5, bge-large-en-v1.5",
+            other
+        ))),
+    }
 }
 
 /// Load embedding provider config with priority:
@@ -135,28 +149,17 @@ pub fn create_embedding_service(
     config: &EmbeddingProviderConfig,
 ) -> Result<Arc<dyn EmbeddingService + Send + Sync>, NarraError> {
     match config {
-        EmbeddingProviderConfig::Local {
+        EmbeddingProviderConfig::Candle {
             model,
             cache_dir,
             show_download_progress,
         } => {
-            let embedding_model = match model.as_str() {
-                "bge-small-en-v1.5" => fastembed::EmbeddingModel::BGESmallENV15,
-                "bge-base-en-v1.5" => fastembed::EmbeddingModel::BGEBaseENV15,
-                "bge-large-en-v1.5" => fastembed::EmbeddingModel::BGELargeENV15,
-                "bge-small-en-v1.5-q" => fastembed::EmbeddingModel::BGESmallENV15Q,
-                "bge-base-en-v1.5-q" => fastembed::EmbeddingModel::BGEBaseENV15Q,
-                "bge-large-en-v1.5-q" => fastembed::EmbeddingModel::BGELargeENV15Q,
-                other => {
-                    return Err(NarraError::Database(format!(
-                        "Unknown local embedding model: '{}'. Supported: bge-small-en-v1.5, bge-base-en-v1.5, bge-large-en-v1.5, bge-small-en-v1.5-q, bge-base-en-v1.5-q, bge-large-en-v1.5-q",
-                        other
-                    )));
-                }
-            };
+            let (repo_id, dimensions) = resolve_model(model)?;
 
             let embedding_config = EmbeddingConfig {
-                model: embedding_model,
+                model_repo: repo_id.to_string(),
+                dimensions,
+                model_id: model.clone(),
                 cache_dir: cache_dir.clone(),
                 show_download_progress: *show_download_progress,
             };

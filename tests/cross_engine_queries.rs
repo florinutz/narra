@@ -164,12 +164,12 @@ async fn test_semantic_graph_search_no_embedding_service() {
 }
 
 // =============================================================================
-// SEMANTIC KNOWLEDGE — INTEGRATION (require fastembed)
+// SEMANTIC KNOWLEDGE — INTEGRATION (require embedding model)
 // =============================================================================
 
 /// Test SemanticKnowledge finds knowledge by meaning.
 #[tokio::test]
-#[ignore = "Requires fastembed model download (run manually with --ignored)"]
+#[ignore = "Requires model download (run manually with --ignored)"]
 async fn test_semantic_knowledge_finds_by_meaning() {
     let harness = TestHarness::new().await;
     let embedding_service =
@@ -279,7 +279,7 @@ async fn test_semantic_knowledge_finds_by_meaning() {
 
 /// Test SemanticKnowledge filters by character.
 #[tokio::test]
-#[ignore = "Requires fastembed model download (run manually with --ignored)"]
+#[ignore = "Requires model download (run manually with --ignored)"]
 async fn test_semantic_knowledge_character_filter() {
     let harness = TestHarness::new().await;
     let embedding_service =
@@ -382,7 +382,7 @@ async fn test_semantic_knowledge_character_filter() {
 
 /// Test SemanticKnowledge with no knowledge returns empty results.
 #[tokio::test]
-#[ignore = "Requires fastembed model download (run manually with --ignored)"]
+#[ignore = "Requires model download (run manually with --ignored)"]
 async fn test_semantic_knowledge_empty_results() {
     let harness = TestHarness::new().await;
     let embedding_service =
@@ -407,12 +407,12 @@ async fn test_semantic_knowledge_empty_results() {
 }
 
 // =============================================================================
-// SEMANTIC GRAPH SEARCH — INTEGRATION (require fastembed)
+// SEMANTIC GRAPH SEARCH — INTEGRATION (require embedding model)
 // =============================================================================
 
 /// Test SemanticGraphSearch finds connected entities ranked by meaning.
 #[tokio::test]
-#[ignore = "Requires fastembed model download (run manually with --ignored)"]
+#[ignore = "Requires model download (run manually with --ignored)"]
 async fn test_semantic_graph_search_ranks_connected_entities() {
     let harness = TestHarness::new().await;
     let embedding_service =
@@ -538,7 +538,7 @@ async fn test_semantic_graph_search_ranks_connected_entities() {
 
 /// Test SemanticGraphSearch with entity_types filter.
 #[tokio::test]
-#[ignore = "Requires fastembed model download (run manually with --ignored)"]
+#[ignore = "Requires model download (run manually with --ignored)"]
 async fn test_semantic_graph_search_type_filter() {
     let harness = TestHarness::new().await;
     let embedding_service =
@@ -613,7 +613,7 @@ async fn test_semantic_graph_search_type_filter() {
 
 /// Test SemanticGraphSearch with no connections returns empty.
 #[tokio::test]
-#[ignore = "Requires fastembed model download (run manually with --ignored)"]
+#[ignore = "Requires model download (run manually with --ignored)"]
 async fn test_semantic_graph_search_no_connections() {
     let harness = TestHarness::new().await;
     let embedding_service =
@@ -656,12 +656,12 @@ async fn test_semantic_graph_search_no_connections() {
 }
 
 // =============================================================================
-// KNOWLEDGE EMBEDDING PIPELINE (require fastembed)
+// KNOWLEDGE EMBEDDING PIPELINE (require embedding model)
 // =============================================================================
 
 /// Test that RecordKnowledge generates embeddings for knowledge entities.
 #[tokio::test]
-#[ignore = "Requires fastembed model download (run manually with --ignored)"]
+#[ignore = "Requires model download (run manually with --ignored)"]
 async fn test_record_knowledge_generates_embedding() {
     let harness = TestHarness::new().await;
     let embedding_service =

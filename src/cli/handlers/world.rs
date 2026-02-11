@@ -883,7 +883,7 @@ pub async fn handle_benchmark(
         "Loading comparison model '{}'...",
         comparison_model
     ));
-    let comp_config = EmbeddingProviderConfig::Local {
+    let comp_config = EmbeddingProviderConfig::Candle {
         model: comparison_model.to_string(),
         cache_dir: None,
         show_download_progress: true,

@@ -605,7 +605,7 @@ async fn test_dramatic_irony_report() {
 /// - Results ranked by similarity score
 /// - Requires embedding model (gracefully handles when unavailable)
 ///
-/// NOTE: This test is ignored because it requires the fastembed model.
+/// NOTE: This test is ignored because it requires the embedding model.
 /// Run with: cargo test --ignored test_semantic_join
 #[tokio::test]
 #[ignore]
@@ -684,7 +684,7 @@ async fn test_semantic_join() {
 /// - Confidence reflects cluster size relative to total
 /// - Requires embeddings (gracefully handles when unavailable)
 ///
-/// NOTE: This test is ignored because it requires the fastembed model.
+/// NOTE: This test is ignored because it requires the embedding model.
 /// Run with: cargo test --ignored test_thematic_clustering
 #[tokio::test]
 #[ignore]

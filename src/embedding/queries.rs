@@ -15,7 +15,7 @@ pub async fn fetch_knowledge_about(
     target_name: &str,
 ) -> Vec<(String, String)> {
     let query = format!(
-        "SELECT out.fact AS fact, certainty FROM knows WHERE in = {} \
+        "SELECT out.fact AS fact, certainty, learned_at FROM knows WHERE in = {} \
          AND out.fact IS NOT NONE AND string::contains(out.fact, $target_name) \
          ORDER BY learned_at DESC LIMIT 5",
         observer_id

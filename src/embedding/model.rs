@@ -1,19 +1,23 @@
-//! Local embedding model implementation using fastembed.
+//! Local embedding model implementation using candle.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use async_trait::async_trait;
-use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 use tracing::warn;
 
+use crate::embedding::candle_backend::{download_model, select_device, BertEmbedder};
 use crate::embedding::EmbeddingService;
 use crate::NarraError;
 
 /// Configuration for embedding model initialization.
 #[derive(Debug, Clone)]
 pub struct EmbeddingConfig {
-    /// Model to use (defaults to BGE-small-en-v1.5)
-    pub model: EmbeddingModel,
+    /// HuggingFace repo ID (e.g. "BAAI/bge-small-en-v1.5")
+    pub model_repo: String,
+    /// Embedding dimensions (e.g. 384 for BGE-small)
+    pub dimensions: usize,
+    /// Short model identifier (e.g. "bge-small-en-v1.5")
+    pub model_id: String,
     /// Optional cache directory for model files
     pub cache_dir: Option<String>,
     /// Show download progress (default: true)
@@ -23,19 +27,21 @@ pub struct EmbeddingConfig {
 impl Default for EmbeddingConfig {
     fn default() -> Self {
         Self {
-            model: EmbeddingModel::BGESmallENV15,
+            model_repo: "BAAI/bge-small-en-v1.5".to_string(),
+            dimensions: 384,
+            model_id: "bge-small-en-v1.5".to_string(),
             cache_dir: None,
             show_download_progress: true,
         }
     }
 }
 
-/// Local embedding service using fastembed.
+/// Local embedding service using candle.
 ///
-/// Wraps TextEmbedding in Arc<Mutex<>> for shared mutable async access.
-/// Uses spawn_blocking to offload CPU-intensive embedding operations.
+/// Wraps BertEmbedder in Arc for shared async access.
+/// Uses spawn_blocking to offload CPU/GPU-intensive embedding operations.
 pub struct LocalEmbeddingService {
-    model: Option<Arc<Mutex<TextEmbedding>>>,
+    embedder: Option<Arc<BertEmbedder>>,
     available: bool,
     dimensions: usize,
     model_id: String,
@@ -44,38 +50,37 @@ pub struct LocalEmbeddingService {
 impl LocalEmbeddingService {
     /// Create a new local embedding service.
     ///
-    /// Attempts to load the specified model. If loading fails (e.g., no internet
+    /// Downloads model files from HuggingFace Hub (cached after first run),
+    /// then loads the BERT model via candle. If loading fails (e.g., no internet
     /// on first run), the service will be unavailable but will not error.
-    ///
-    /// # Arguments
-    ///
-    /// * `config` - Configuration for model initialization
-    ///
-    /// # Returns
-    ///
-    /// A new LocalEmbeddingService instance (may be unavailable if model load failed).
     pub fn new(config: EmbeddingConfig) -> Result<Self, NarraError> {
-        // Determine dimensions and model_id before moving config.model
-        let (dimensions, model_id) = match config.model {
-            EmbeddingModel::BGESmallENV15 => (384, "bge-small-en-v1.5".to_string()),
-            EmbeddingModel::BGEBaseENV15 => (768, "bge-base-en-v1.5".to_string()),
-            EmbeddingModel::BGELargeENV15 => (1024, "bge-large-en-v1.5".to_string()),
-            EmbeddingModel::BGESmallENV15Q => (384, "bge-small-en-v1.5-q".to_string()),
-            EmbeddingModel::BGEBaseENV15Q => (768, "bge-base-en-v1.5-q".to_string()),
-            EmbeddingModel::BGELargeENV15Q => (1024, "bge-large-en-v1.5-q".to_string()),
-            _ => (384, format!("{:?}", config.model)),
+        let dimensions = config.dimensions;
+        let model_id = config.model_id.clone();
+
+        let files = match download_model(
+            &config.model_repo,
+            config.cache_dir.as_deref().map(std::path::Path::new),
+        ) {
+            Ok(files) => files,
+            Err(e) => {
+                warn!(
+                    "Failed to download embedding model: {}. Embedding service will be unavailable.",
+                    e
+                );
+                return Ok(Self {
+                    embedder: None,
+                    available: false,
+                    dimensions,
+                    model_id,
+                });
+            }
         };
 
-        let mut init_options = InitOptions::new(config.model)
-            .with_show_download_progress(config.show_download_progress);
+        let device = select_device();
 
-        if let Some(cache_dir) = config.cache_dir {
-            init_options = init_options.with_cache_dir(cache_dir.into());
-        }
-
-        match TextEmbedding::try_new(init_options) {
-            Ok(embedding) => Ok(Self {
-                model: Some(Arc::new(Mutex::new(embedding))),
+        match BertEmbedder::new(&files, device) {
+            Ok(embedder) => Ok(Self {
+                embedder: Some(Arc::new(embedder)),
                 available: true,
                 dimensions,
                 model_id,
@@ -86,7 +91,7 @@ impl LocalEmbeddingService {
                     e
                 );
                 Ok(Self {
-                    model: None,
+                    embedder: None,
                     available: false,
                     dimensions,
                     model_id,
@@ -105,21 +110,17 @@ impl EmbeddingService for LocalEmbeddingService {
             ));
         }
 
-        // Clone the Arc to move into spawn_blocking
-        let model = self
-            .model
+        let embedder = self
+            .embedder
             .as_ref()
             .ok_or_else(|| NarraError::Database("Embedding model not loaded".to_string()))?
             .clone();
 
         let text = text.to_string();
 
-        // Use spawn_blocking since fastembed operations are synchronous and CPU-bound
+        // Use spawn_blocking since candle operations are synchronous and CPU/GPU-bound
         let result = tokio::task::spawn_blocking(move || {
-            let mut model_guard = model
-                .lock()
-                .map_err(|e| anyhow::anyhow!("Mutex lock failed: {}", e))?;
-            let embeddings = model_guard.embed(vec![text], None)?;
+            let embeddings = embedder.embed(&[text])?;
             Ok::<Vec<Vec<f32>>, anyhow::Error>(embeddings)
         })
         .await
@@ -139,21 +140,17 @@ impl EmbeddingService for LocalEmbeddingService {
             ));
         }
 
-        let model = self
-            .model
+        let embedder = self
+            .embedder
             .as_ref()
             .ok_or_else(|| NarraError::Database("Embedding model not loaded".to_string()))?
             .clone();
 
         let texts = texts.to_vec();
 
-        // Use spawn_blocking since fastembed operations are synchronous and CPU-bound
-        // Use batch size of 50 for optimal performance
+        // Use spawn_blocking since candle operations are synchronous and CPU/GPU-bound
         let result = tokio::task::spawn_blocking(move || {
-            let mut model_guard = model
-                .lock()
-                .map_err(|e| anyhow::anyhow!("Mutex lock failed: {}", e))?;
-            let embeddings = model_guard.embed(texts, Some(50))?;
+            let embeddings = embedder.embed(&texts)?;
             Ok::<Vec<Vec<f32>>, anyhow::Error>(embeddings)
         })
         .await
@@ -176,6 +173,6 @@ impl EmbeddingService for LocalEmbeddingService {
     }
 
     fn provider_name(&self) -> &str {
-        "fastembed"
+        "candle"
     }
 }

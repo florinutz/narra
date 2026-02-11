@@ -1059,12 +1059,12 @@ async fn test_arc_moment_at_event() {
 }
 
 // =============================================================================
-// SNAPSHOT CAPTURE INTEGRATION TESTS (require fastembed model)
+// SNAPSHOT CAPTURE INTEGRATION TESTS (require embedding model)
 // =============================================================================
 
 /// Test that embedding regeneration creates arc snapshots automatically.
 #[tokio::test]
-#[ignore = "Requires fastembed model download (run manually with --ignored)"]
+#[ignore = "Requires model download (run manually with --ignored)"]
 async fn test_regeneration_creates_arc_snapshot() {
     let harness = TestHarness::new().await;
     let embedding_service =
@@ -1176,7 +1176,7 @@ async fn test_regeneration_creates_arc_snapshot() {
 
 /// Test that event_id is captured on snapshots when provided via RecordKnowledge.
 #[tokio::test]
-#[ignore = "Requires fastembed model download (run manually with --ignored)"]
+#[ignore = "Requires model download (run manually with --ignored)"]
 async fn test_snapshot_captures_event_id() {
     let harness = TestHarness::new().await;
     let embedding_service =
@@ -1321,7 +1321,7 @@ async fn test_snapshot_captures_event_id() {
 
 /// Test end-to-end arc tracking workflow with real embeddings.
 #[tokio::test]
-#[ignore = "Requires fastembed model download (run manually with --ignored)"]
+#[ignore = "Requires model download (run manually with --ignored)"]
 async fn test_full_arc_tracking_workflow() {
     let harness = TestHarness::new().await;
     let embedding_service =

@@ -26,10 +26,10 @@ use std::sync::Arc;
 ///
 /// Verifies: Semantic search ranks by meaning similarity, not just keywords
 ///
-/// Note: Requires real fastembed model (~50MB download on first run).
+/// Note: Requires real embedding model (~50MB download on first run).
 /// Run with: cargo test --test semantic_search -- --ignored --nocapture
 #[tokio::test]
-#[ignore = "Requires fastembed model download (run manually with --ignored)"]
+#[ignore = "Requires model download (run manually with --ignored)"]
 async fn test_semantic_search_finds_by_meaning() {
     let harness = TestHarness::new().await;
 
@@ -143,9 +143,9 @@ async fn test_semantic_search_finds_by_meaning() {
 ///
 /// Verifies: Scene semantic search works for thematic/mood queries
 ///
-/// Note: Requires real fastembed model (~50MB download on first run).
+/// Note: Requires real embedding model (~50MB download on first run).
 #[tokio::test]
-#[ignore = "Requires fastembed model download (run manually with --ignored)"]
+#[ignore = "Requires model download (run manually with --ignored)"]
 async fn test_semantic_search_scene_by_mood() {
     let harness = TestHarness::new().await;
 
@@ -259,9 +259,9 @@ async fn test_semantic_search_scene_by_mood() {
 ///
 /// Verifies: Hybrid search uses both keyword and semantic components
 ///
-/// Note: Requires real fastembed model (~50MB download on first run).
+/// Note: Requires real embedding model (~50MB download on first run).
 #[tokio::test]
-#[ignore = "Requires fastembed model download (run manually with --ignored)"]
+#[ignore = "Requires model download (run manually with --ignored)"]
 async fn test_hybrid_search_combines_keyword_and_meaning() {
     let harness = TestHarness::new().await;
 

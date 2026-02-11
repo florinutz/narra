@@ -31,7 +31,11 @@ serde_json = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 dirs = "6.0"
-fastembed = "5.8.1"
+candle-core = "0.9"
+candle-nn = "0.9"
+candle-transformers = "0.9"
+hf-hub = "0.4"
+tokenizers = "0.21"
 graphrs = "0.11"
 linfa = "0.7"
 linfa-clustering = "0.7"
@@ -45,6 +49,9 @@ clap_complete = "4.5"
 toml = "0.8"
 
 [features]
+default = ["metal"]
+metal = ["candle-core/metal"]
+cuda = ["candle-core/cuda"]
 surrealdb3 = []
 
 [profile.release]

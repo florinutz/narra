@@ -5,7 +5,7 @@
 //! - ThematicGaps: cluster gap detection with narrative interpretation
 //! - WhatIf: hypothetical embedding shift, conflict detection, cascade preview
 //!
-//! Most tests use manually-injected embeddings to avoid requiring the fastembed model.
+//! Most tests use manually-injected embeddings to avoid requiring the embedding model.
 //! Tests marked `#[ignore]` require real embeddings (run with `cargo test --ignored`).
 
 mod common;
@@ -914,7 +914,7 @@ async fn test_what_if_nonexistent_character() {
 
 /// Test WhatIf with nonexistent fact returns error.
 #[tokio::test]
-#[ignore = "Requires fastembed model download"]
+#[ignore = "Requires model download"]
 async fn test_what_if_nonexistent_fact() {
     let harness = TestHarness::new().await;
     let embedding_service =
@@ -951,7 +951,7 @@ async fn test_what_if_nonexistent_fact() {
 
 /// Test WhatIf with character missing embedding returns helpful error.
 #[tokio::test]
-#[ignore = "Requires fastembed model download"]
+#[ignore = "Requires model download"]
 async fn test_what_if_no_character_embedding() {
     let harness = TestHarness::new().await;
     let embedding_service =
@@ -1024,7 +1024,7 @@ async fn test_what_if_no_character_embedding() {
 
 /// Test full WhatIf workflow with real embeddings.
 #[tokio::test]
-#[ignore = "Requires fastembed model download"]
+#[ignore = "Requires model download"]
 async fn test_what_if_full_workflow() {
     let harness = TestHarness::new().await;
     let embedding_service =
@@ -1217,7 +1217,7 @@ async fn test_what_if_full_workflow() {
 
 /// Test WhatIf ID normalization works with bare keys.
 #[tokio::test]
-#[ignore = "Requires fastembed model download"]
+#[ignore = "Requires model download"]
 async fn test_what_if_id_normalization() {
     let harness = TestHarness::new().await;
     let embedding_service =
@@ -1317,7 +1317,7 @@ async fn test_what_if_id_normalization() {
 
 /// Test WhatIf conflict detection flags semantically similar existing knowledge.
 #[tokio::test]
-#[ignore = "Requires fastembed model download"]
+#[ignore = "Requires model download"]
 async fn test_what_if_conflict_detection() {
     let harness = TestHarness::new().await;
     let embedding_service =

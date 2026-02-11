@@ -1112,7 +1112,7 @@ impl BackfillService {
     async fn get_all_character_knowledge(
         &self,
     ) -> Result<HashMap<String, Vec<(String, String)>>, NarraError> {
-        let query = r#"SELECT type::string(in) AS char_id, out.fact AS fact, certainty
+        let query = r#"SELECT type::string(in) AS char_id, out.fact AS fact, certainty, learned_at
                        FROM knows WHERE out.fact IS NOT NONE ORDER BY learned_at DESC"#;
         let mut response = self.db.query(query).await?;
 
