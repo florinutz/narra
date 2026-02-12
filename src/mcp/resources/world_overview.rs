@@ -9,7 +9,9 @@ use crate::mcp::NarraServer;
 ///
 /// Reuses existing handle_overview logic to produce an overview of all entity types.
 pub async fn get_world_overview_resource(server: &NarraServer) -> Result<String, String> {
-    let response = server.handle_overview("all", 20).await?;
+    let response = server
+        .handle_overview("all", 20, crate::services::noop_progress())
+        .await?;
 
     serde_json::to_string_pretty(&response)
         .map_err(|e| format!("Failed to serialize world overview: {}", e))

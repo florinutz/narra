@@ -1,4 +1,5 @@
 pub mod error;
+pub mod progress;
 pub mod prompts;
 pub mod resources;
 pub mod server;

@@ -101,7 +101,9 @@ fn tool_type_budget(request: &QueryRequest) -> usize {
         | QueryRequest::GetFact { .. }
         | QueryRequest::ArcMoment { .. }
         | QueryRequest::CharacterVoice { .. }
-        | QueryRequest::Emotions { .. } => 1000,
+        | QueryRequest::Emotions { .. }
+        | QueryRequest::Themes { .. }
+        | QueryRequest::ExtractEntities { .. } => 1000,
 
         // Analysis/intelligence tools — medium-high
         QueryRequest::KnowledgeAsymmetries { .. }
@@ -113,6 +115,8 @@ fn tool_type_budget(request: &QueryRequest) -> usize {
         | QueryRequest::ConvergenceAnalysis { .. }
         | QueryRequest::DetectPhases { .. }
         | QueryRequest::DetectTransitions { .. }
+        | QueryRequest::NarrativeTensions { .. }
+        | QueryRequest::InferRoles { .. }
         | QueryRequest::LoadPhases => 3000,
 
         // Everything else (searches, lists, graphs) — standard
@@ -278,8 +282,12 @@ impl NarraServer {
                     .await
             }
             QueryRequest::Overview { entity_type, limit } => {
-                self.handle_overview(&entity_type, limit.unwrap_or(20).min(MAX_LIMIT))
-                    .await
+                self.handle_overview(
+                    &entity_type,
+                    limit.unwrap_or(20).min(MAX_LIMIT),
+                    crate::services::noop_progress(),
+                )
+                .await
             }
             QueryRequest::ListNotes { entity_id, limit } => {
                 self.handle_list_notes(entity_id, limit.unwrap_or(50).min(MAX_LIMIT))
@@ -547,22 +555,36 @@ impl NarraServer {
                     .await
             }
             QueryRequest::SituationReport { detail_level } => {
-                self.handle_situation_report(detail_level, token_budget)
-                    .await
+                self.handle_situation_report(
+                    detail_level,
+                    token_budget,
+                    crate::services::noop_progress(),
+                )
+                .await
             }
             QueryRequest::CharacterDossier {
                 character_id,
                 detail_level,
             } => {
-                self.handle_character_dossier(&character_id, detail_level, token_budget)
-                    .await
+                self.handle_character_dossier(
+                    &character_id,
+                    detail_level,
+                    token_budget,
+                    crate::services::noop_progress(),
+                )
+                .await
             }
             QueryRequest::ScenePlanning {
                 character_ids,
                 detail_level,
             } => {
-                self.handle_scene_planning(&character_ids, detail_level, token_budget)
-                    .await
+                self.handle_scene_planning(
+                    &character_ids,
+                    detail_level,
+                    token_budget,
+                    crate::services::noop_progress(),
+                )
+                .await
             }
             QueryRequest::GrowthVector { entity_id, limit } => {
                 self.handle_growth_vector(&entity_id, limit).await
@@ -667,6 +689,26 @@ impl NarraServer {
                 .await
             }
             QueryRequest::Emotions { entity_id } => self.handle_emotions(&entity_id).await,
+            QueryRequest::Themes { entity_id, themes } => {
+                self.handle_themes(&entity_id, themes).await
+            }
+            QueryRequest::ExtractEntities { entity_id } => {
+                self.handle_extract_entities(&entity_id).await
+            }
+            QueryRequest::NarrativeTensions {
+                limit,
+                min_severity,
+            } => {
+                self.handle_narrative_tensions(
+                    limit.unwrap_or(20).min(MAX_LIMIT),
+                    min_severity.unwrap_or(0.0),
+                )
+                .await
+            }
+            QueryRequest::InferRoles { limit } => {
+                self.handle_infer_roles(limit.unwrap_or(20).min(MAX_LIMIT))
+                    .await
+            }
             QueryRequest::DetectTransitions {
                 entity_types,
                 num_phases,

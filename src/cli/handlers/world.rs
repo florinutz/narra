@@ -1184,3 +1184,68 @@ pub async fn handle_benchmark(
 
     Ok(())
 }
+
+pub async fn handle_annotate(
+    ctx: &crate::init::AppContext,
+    entity_types: &[String],
+    skip_emotions: bool,
+    skip_themes: bool,
+    skip_ner: bool,
+    concurrency: usize,
+    mode: crate::cli::OutputMode,
+) -> Result<(), crate::NarraError> {
+    use crate::services::{AnnotationPipeline, PipelineConfig};
+
+    let types: Vec<String> = if entity_types.is_empty() {
+        vec![
+            "character".to_string(),
+            "event".to_string(),
+            "scene".to_string(),
+        ]
+    } else {
+        entity_types.to_vec()
+    };
+    let type_refs: Vec<&str> = types.iter().map(|s| s.as_str()).collect();
+
+    let config = PipelineConfig {
+        run_emotions: !skip_emotions,
+        run_themes: !skip_themes,
+        run_ner: !skip_ner,
+        concurrency,
+    };
+
+    let pipeline = AnnotationPipeline::new(
+        ctx.db.clone(),
+        ctx.emotion_service.clone(),
+        ctx.theme_service.clone(),
+        ctx.ner_service.clone(),
+    );
+
+    let progress = crate::services::noop_progress();
+
+    println!("Running annotation pipeline on types: {}", types.join(", "));
+
+    let report = pipeline.annotate_all(&type_refs, config, progress).await?;
+
+    match mode {
+        crate::cli::OutputMode::Json => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&report).unwrap_or_default()
+            );
+        }
+        _ => {
+            println!("\nAnnotation Pipeline Report");
+            println!("==========================");
+            println!("Total processed: {}", report.total_processed);
+            println!("Emotion successes: {}", report.emotion_successes);
+            println!("Theme successes: {}", report.theme_successes);
+            println!("NER successes: {}", report.ner_successes);
+            if report.errors > 0 {
+                println!("Errors: {}", report.errors);
+            }
+        }
+    }
+
+    Ok(())
+}

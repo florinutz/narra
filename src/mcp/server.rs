@@ -1,10 +1,12 @@
 use crate::db::connection::NarraDb;
+use crate::mcp::progress::make_mcp_progress;
 use rmcp::{
     handler::server::tool::ToolRouter,
     handler::server::wrapper::{Json, Parameters},
     model::*,
     service::RequestContext,
-    tool, tool_handler, tool_router, ErrorData as McpError, RoleServer, ServerHandler, ServiceExt,
+    tool, tool_handler, tool_router, ErrorData as McpError, Peer, RoleServer, ServerHandler,
+    ServiceExt,
 };
 use std::sync::Arc;
 use tracing::instrument;
@@ -23,6 +25,8 @@ use crate::repository::{
     SurrealEntityRepository, SurrealKnowledgeRepository, SurrealRelationshipRepository,
 };
 use crate::services::EmotionService;
+use crate::services::NerService;
+use crate::services::ThemeService;
 use crate::services::{
     CachedContextService, CachedSummaryService, ConsistencyChecker, ConsistencyService,
     ContextService, ImpactAnalyzer, ImpactService, SearchService, SummaryService,
@@ -60,6 +64,8 @@ pub struct NarraServer {
     pub(crate) embedding_service: Arc<dyn EmbeddingService + Send + Sync>,
     pub(crate) staleness_manager: Arc<StalenessManager>,
     pub(crate) emotion_service: Arc<dyn EmotionService + Send + Sync>,
+    pub(crate) theme_service: Arc<dyn ThemeService + Send + Sync>,
+    pub(crate) ner_service: Arc<dyn NerService + Send + Sync>,
     tool_router: ToolRouter<Self>,
 }
 
@@ -108,6 +114,26 @@ impl NarraServer {
             }
         };
 
+        // Theme classifier — degrades gracefully if model unavailable
+        let theme_service: Arc<dyn ThemeService + Send + Sync> = {
+            let service = crate::services::LocalThemeService::new(db.clone());
+            if service.is_available() {
+                Arc::new(service)
+            } else {
+                Arc::new(crate::services::NoopThemeService::new())
+            }
+        };
+
+        // NER classifier — degrades gracefully if model unavailable
+        let ner_service: Arc<dyn NerService + Send + Sync> = {
+            let service = crate::services::LocalNerService::new(db.clone());
+            if service.is_available() {
+                Arc::new(service)
+            } else {
+                Arc::new(crate::services::NoopNerService::new())
+            }
+        };
+
         Self {
             db,
             search_service,
@@ -122,6 +148,8 @@ impl NarraServer {
             embedding_service,
             staleness_manager,
             emotion_service,
+            theme_service,
+            ner_service,
             tool_router: Self::tool_router(),
         }
     }
@@ -138,11 +166,24 @@ impl NarraServer {
     pub async fn query(
         &self,
         request: Parameters<QueryInput>,
+        meta: Meta,
+        client: Peer<RoleServer>,
     ) -> Result<Json<QueryResponse>, ToolError> {
-        self.handle_query(request)
+        let progress = make_mcp_progress(&meta, &client);
+        progress
+            .report(0.0, 1.0, Some("Processing query...".into()))
+            .await;
+
+        let result = self
+            .handle_query(request)
             .await
             .map(Json)
-            .map_err(ToolError::from)
+            .map_err(ToolError::from);
+
+        progress
+            .report(1.0, 1.0, Some("Query complete".into()))
+            .await;
+        result
     }
 
     #[tool(
@@ -152,11 +193,24 @@ impl NarraServer {
     pub async fn mutate(
         &self,
         request: Parameters<MutationInput>,
+        meta: Meta,
+        client: Peer<RoleServer>,
     ) -> Result<Json<MutationResponse>, ToolError> {
-        self.handle_mutate(request)
+        let progress = make_mcp_progress(&meta, &client);
+        progress
+            .report(0.0, 1.0, Some("Processing mutation...".into()))
+            .await;
+
+        let result = self
+            .handle_mutate(request)
             .await
             .map(Json)
-            .map_err(ToolError::from)
+            .map_err(ToolError::from);
+
+        progress
+            .report(1.0, 1.0, Some("Mutation complete".into()))
+            .await;
+        result
     }
 
     #[tool(
@@ -234,9 +288,12 @@ impl NarraServer {
     pub async fn dossier(
         &self,
         request: Parameters<DossierInput>,
+        meta: Meta,
+        client: Peer<RoleServer>,
     ) -> Result<Json<QueryResponse>, ToolError> {
+        let progress = make_mcp_progress(&meta, &client);
         let Parameters(input) = request;
-        self.handle_character_dossier(&input.character_id, None, DEFAULT_TOKEN_BUDGET)
+        self.handle_character_dossier(&input.character_id, None, DEFAULT_TOKEN_BUDGET, progress)
             .await
             .map(Json)
             .map_err(ToolError::from)
@@ -249,9 +306,12 @@ impl NarraServer {
     pub async fn scene_prep(
         &self,
         request: Parameters<ScenePrepInput>,
+        meta: Meta,
+        client: Peer<RoleServer>,
     ) -> Result<Json<QueryResponse>, ToolError> {
+        let progress = make_mcp_progress(&meta, &client);
         let Parameters(input) = request;
-        self.handle_scene_planning(&input.character_ids, None, DEFAULT_TOKEN_BUDGET)
+        self.handle_scene_planning(&input.character_ids, None, DEFAULT_TOKEN_BUDGET, progress)
             .await
             .map(Json)
             .map_err(ToolError::from)
@@ -264,12 +324,19 @@ impl NarraServer {
     pub async fn overview(
         &self,
         request: Parameters<OverviewInput>,
+        meta: Meta,
+        client: Peer<RoleServer>,
     ) -> Result<Json<QueryResponse>, ToolError> {
+        let progress = make_mcp_progress(&meta, &client);
         let Parameters(input) = request;
-        self.handle_overview(&input.entity_type, input.limit.unwrap_or(20).min(MAX_LIMIT))
-            .await
-            .map(Json)
-            .map_err(ToolError::from)
+        self.handle_overview(
+            &input.entity_type,
+            input.limit.unwrap_or(20).min(MAX_LIMIT),
+            progress,
+        )
+        .await
+        .map(Json)
+        .map_err(ToolError::from)
     }
 
     #[tool(
@@ -920,6 +987,8 @@ impl NarraServer {
             embedding_service: ctx.embedding_service.clone(),
             staleness_manager: ctx.staleness_manager.clone(),
             emotion_service: ctx.emotion_service.clone(),
+            theme_service: ctx.theme_service.clone(),
+            ner_service: ctx.ner_service.clone(),
             tool_router: Self::tool_router(),
         }
     }
@@ -1078,7 +1147,12 @@ impl NarraServer {
         character_id: &str,
     ) -> Result<ReadResourceResult, McpError> {
         let response = self
-            .handle_character_dossier(character_id, None, DEFAULT_TOKEN_BUDGET)
+            .handle_character_dossier(
+                character_id,
+                None,
+                DEFAULT_TOKEN_BUDGET,
+                crate::services::noop_progress(),
+            )
             .await
             .map_err(|e| {
                 if e.contains("not found") {

@@ -15,8 +15,8 @@ use crate::repository::{
 };
 use crate::services::{
     CachedContextService, CachedSummaryService, ConsistencyChecker, ConsistencyService,
-    ContextService, EmotionService, ImpactAnalyzer, ImpactService, SearchService, SummaryService,
-    SurrealSearchService,
+    ContextService, EmotionService, ImpactAnalyzer, ImpactService, NerService, SearchService,
+    SummaryService, SurrealSearchService, ThemeService,
 };
 use crate::session::SessionStateManager;
 
@@ -38,6 +38,8 @@ pub struct AppContext {
     pub knowledge_repo: Arc<SurrealKnowledgeRepository>,
     pub staleness_manager: Arc<StalenessManager>,
     pub emotion_service: Arc<dyn EmotionService + Send + Sync>,
+    pub theme_service: Arc<dyn ThemeService + Send + Sync>,
+    pub ner_service: Arc<dyn NerService + Send + Sync>,
     /// Whether the current embedding model mismatches stored world metadata.
     pub embedding_model_mismatch: ModelMatch,
 }
@@ -178,6 +180,32 @@ impl AppContext {
             }
         };
 
+        // Theme classifier — loads model eagerly, degrades gracefully if unavailable.
+        let theme_service: Arc<dyn ThemeService + Send + Sync> = {
+            let service = crate::services::LocalThemeService::new(db.clone());
+            if service.is_available() {
+                Arc::new(service)
+            } else {
+                tracing::info!(
+                    "Theme classifier not available, using noop (theme queries will return errors)"
+                );
+                Arc::new(crate::services::NoopThemeService::new())
+            }
+        };
+
+        // NER classifier — loads model eagerly, degrades gracefully if unavailable.
+        let ner_service: Arc<dyn NerService + Send + Sync> = {
+            let service = crate::services::LocalNerService::new(db.clone());
+            if service.is_available() {
+                Arc::new(service)
+            } else {
+                tracing::info!(
+                    "NER classifier not available, using noop (entity extraction will return errors)"
+                );
+                Arc::new(crate::services::NoopNerService::new())
+            }
+        };
+
         Ok(Self {
             db,
             data_path,
@@ -193,6 +221,8 @@ impl AppContext {
             knowledge_repo,
             staleness_manager,
             emotion_service,
+            theme_service,
+            ner_service,
             embedding_model_mismatch,
         })
     }

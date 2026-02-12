@@ -7,6 +7,7 @@ use serde::Deserialize;
 
 use crate::mcp::types::MAX_LIMIT;
 use crate::mcp::{EntityResult, NarraServer, QueryResponse};
+use crate::utils::sanitize::validate_entity_id;
 
 impl NarraServer {
     pub(crate) async fn handle_tension_matrix(
@@ -117,6 +118,8 @@ impl NarraServer {
         &self,
         character_id: &str,
     ) -> Result<QueryResponse, String> {
+        validate_entity_id(character_id).map_err(|e| e.to_string())?;
+
         // Get character name
         #[derive(Deserialize)]
         struct NameRow {
@@ -194,18 +197,18 @@ impl NarraServer {
         for k in &known {
             let fact_display = k.fact.as_deref().unwrap_or(&k.target);
             match k.certainty.as_str() {
-                "Knows" => confident_knowledge.push(fact_display.to_string()),
-                "Suspects" | "Uncertain" | "Assumes" => {
+                "knows" => confident_knowledge.push(fact_display.to_string()),
+                "suspects" | "uncertain" | "assumes" => {
                     suspicions.push(fact_display.to_string());
                 }
-                "BelievesWrongly" => {
+                "believes_wrongly" => {
                     false_beliefs.push(format!(
                         "{} (truth: {})",
                         fact_display,
                         k.truth_value.as_deref().unwrap_or("unknown")
                     ));
                 }
-                "Denies" => {
+                "denies" => {
                     false_beliefs.push(format!("{} (denies)", fact_display));
                 }
                 _ => {}
@@ -226,7 +229,7 @@ impl NarraServer {
             if known_targets.contains(wk.target.as_str()) {
                 continue;
             }
-            if wk.certainty == "Knows" && seen_targets.insert(wk.target.clone()) {
+            if wk.certainty == "knows" && seen_targets.insert(wk.target.clone()) {
                 let fact_display = wk.fact.as_deref().unwrap_or(&wk.target);
                 blind_spots.push(format!("{} (known by {})", fact_display, wk.knower));
                 if blind_spots.len() >= 20 {
@@ -315,6 +318,7 @@ impl NarraServer {
         limit: Option<usize>,
     ) -> Result<QueryResponse, String> {
         let limit = limit.unwrap_or(20).min(MAX_LIMIT);
+        validate_entity_id(character_id).map_err(|e| e.to_string())?;
 
         // Get character name
         #[derive(Deserialize)]
@@ -500,7 +504,7 @@ impl NarraServer {
             // Find knowledge held by only one character (potential secrets)
             let secret_query = "SELECT meta::id(in) AS knower, meta::id(out) AS target, \
                                out.fact AS fact \
-                               FROM knows WHERE certainty = 'Knows' \
+                               FROM knows WHERE certainty = 'knows' \
                                GROUP BY target \
                                HAVING count() = 1 \
                                LIMIT 20";
@@ -534,7 +538,7 @@ impl NarraServer {
 
             let conflict_query =
                 "SELECT meta::id(in) AS character, meta::id(out) AS target, truth_value \
-                 FROM knows WHERE certainty = 'BelievesWrongly' LIMIT 20";
+                 FROM knows WHERE certainty = 'believes_wrongly' LIMIT 20";
             let mut resp = self
                 .db
                 .query(conflict_query)
@@ -658,6 +662,7 @@ impl NarraServer {
     }
 
     pub(crate) async fn handle_emotions(&self, entity_id: &str) -> Result<QueryResponse, String> {
+        validate_entity_id(entity_id).map_err(|e| e.to_string())?;
         if !self.emotion_service.is_available() {
             return Err(
                 "Emotion classifier is not available. The GoEmotions model may not be downloaded."
@@ -747,10 +752,399 @@ impl NarraServer {
         })
     }
 
+    pub(crate) async fn handle_extract_entities(
+        &self,
+        entity_id: &str,
+    ) -> Result<QueryResponse, String> {
+        validate_entity_id(entity_id).map_err(|e| e.to_string())?;
+        if !self.ner_service.is_available() {
+            return Err(
+                "NER model is not available. The bert-base-NER model may not be downloaded."
+                    .to_string(),
+            );
+        }
+
+        // Fetch composite text for the entity
+        #[derive(Deserialize)]
+        struct CompositeRow {
+            composite_text: Option<String>,
+            name: Option<String>,
+            title: Option<String>,
+            fact: Option<String>,
+            description: Option<String>,
+        }
+
+        let mut resp = self
+            .db
+            .query(format!(
+                "SELECT composite_text, name, title, fact, description FROM {} LIMIT 1",
+                entity_id
+            ))
+            .await
+            .map_err(|e| format!("Entity lookup failed: {}", e))?;
+
+        let entity: Option<CompositeRow> = resp
+            .take(0)
+            .map_err(|e| format!("Failed to parse entity: {}", e))?;
+
+        let entity = entity.ok_or_else(|| format!("Entity not found: {}", entity_id))?;
+
+        let text = entity
+            .composite_text
+            .or(entity.description)
+            .or(entity.name)
+            .or(entity.title)
+            .or(entity.fact)
+            .ok_or_else(|| {
+                format!(
+                    "No text content available for {}. Run backfill_embeddings first.",
+                    entity_id
+                )
+            })?;
+
+        let output = self
+            .ner_service
+            .get_entities(entity_id, &text)
+            .await
+            .map_err(|e| format!("NER extraction failed: {}", e))?;
+
+        // Format output
+        let mut content_parts = vec![format!(
+            "# Named Entities: {} ({} found)",
+            entity_id, output.entity_count
+        )];
+
+        if output.entities.is_empty() {
+            content_parts.push("\nNo named entities detected in this text.".to_string());
+        } else {
+            // Group by label type
+            let mut by_type: std::collections::BTreeMap<
+                &str,
+                Vec<&crate::models::annotation::NerEntity>,
+            > = std::collections::BTreeMap::new();
+            for ent in &output.entities {
+                by_type.entry(&ent.label).or_default().push(ent);
+            }
+
+            for (label, entities) in &by_type {
+                let type_name = match *label {
+                    "PER" => "Persons",
+                    "LOC" => "Locations",
+                    "ORG" => "Organizations",
+                    "MISC" => "Miscellaneous",
+                    other => other,
+                };
+                content_parts.push(format!("\n## {} ({})", type_name, entities.len()));
+                for ent in entities {
+                    content_parts.push(format!(
+                        "- **{}** (score: {:.2}, chars {}-{})",
+                        ent.text, ent.score, ent.start, ent.end
+                    ));
+                }
+            }
+        }
+
+        let content = content_parts.join("\n");
+        let token_estimate = content.len() / 4 + 50;
+
+        Ok(QueryResponse {
+            results: vec![EntityResult {
+                id: format!("report:ner:{}", entity_id),
+                entity_type: "report".to_string(),
+                name: format!("Named Entities: {}", entity_id),
+                content,
+                confidence: None,
+                last_modified: None,
+            }],
+            total: 1,
+            next_cursor: None,
+            hints: vec![
+                "NER results are cached — they auto-refresh when the entity changes".to_string(),
+                "Use this to discover unlinked characters, locations, or organizations in text"
+                    .to_string(),
+            ],
+            token_estimate,
+            truncated: None,
+        })
+    }
+
+    pub(crate) async fn handle_themes(
+        &self,
+        entity_id: &str,
+        themes: Option<Vec<String>>,
+    ) -> Result<QueryResponse, String> {
+        validate_entity_id(entity_id).map_err(|e| e.to_string())?;
+        if !self.theme_service.is_available() {
+            return Err(
+                "Theme classifier is not available. The NLI model may not be downloaded."
+                    .to_string(),
+            );
+        }
+
+        // Fetch composite text for the entity
+        #[derive(Deserialize)]
+        struct CompositeRow {
+            composite_text: Option<String>,
+            name: Option<String>,
+            title: Option<String>,
+            fact: Option<String>,
+            description: Option<String>,
+        }
+
+        let mut resp = self
+            .db
+            .query(format!(
+                "SELECT composite_text, name, title, fact, description FROM {} LIMIT 1",
+                entity_id
+            ))
+            .await
+            .map_err(|e| format!("Entity lookup failed: {}", e))?;
+
+        let entity: Option<CompositeRow> = resp
+            .take(0)
+            .map_err(|e| format!("Failed to parse entity: {}", e))?;
+
+        let entity = entity.ok_or_else(|| format!("Entity not found: {}", entity_id))?;
+
+        let text = entity
+            .composite_text
+            .or(entity.description)
+            .or(entity.name)
+            .or(entity.title)
+            .or(entity.fact)
+            .ok_or_else(|| {
+                format!(
+                    "No text content available for {}. Run backfill_embeddings first.",
+                    entity_id
+                )
+            })?;
+
+        let theme_refs = themes.as_deref();
+        let output = self
+            .theme_service
+            .get_themes(entity_id, &text, theme_refs)
+            .await
+            .map_err(|e| format!("Theme classification failed: {}", e))?;
+
+        // Format output
+        let using_custom = themes.is_some();
+        let mut content_parts = vec![format!("# Theme Analysis: {}", entity_id)];
+        content_parts.push(format!(
+            "**Dominant:** {} | **Active themes:** {} | **Mode:** {}",
+            output.dominant,
+            output.active_count,
+            if using_custom { "custom" } else { "default" }
+        ));
+
+        content_parts.push("\n| Theme | Score |".to_string());
+        content_parts.push("|-------|-------|".to_string());
+
+        // Show top themes (above threshold or top 10)
+        let display_count = output.active_count.max(5).min(output.themes.len());
+        for score in output.themes.iter().take(display_count) {
+            let bar = if score.score >= 0.5 { " ***" } else { "" };
+            content_parts.push(format!("| {} | {:.3}{} |", score.label, score.score, bar));
+        }
+
+        let content = content_parts.join("\n");
+        let token_estimate = content.len() / 4 + 50;
+
+        Ok(QueryResponse {
+            results: vec![EntityResult {
+                id: format!("report:themes:{}", entity_id),
+                entity_type: "report".to_string(),
+                name: format!("Themes: {}", entity_id),
+                content,
+                confidence: None,
+                last_modified: None,
+            }],
+            total: 1,
+            next_cursor: None,
+            hints: vec![
+                "Theme scores are cached — they auto-refresh when the entity changes".to_string(),
+                "Pass custom themes to classify against your own categories".to_string(),
+            ],
+            token_estimate,
+            truncated: None,
+        })
+    }
+
+    pub(crate) async fn handle_narrative_tensions(
+        &self,
+        limit: usize,
+        min_severity: f32,
+    ) -> Result<QueryResponse, String> {
+        let service = crate::services::TensionService::new(self.db.clone());
+        let report = service
+            .detect_tensions(limit, min_severity)
+            .await
+            .map_err(|e| format!("Tension detection failed: {}", e))?;
+
+        if report.tensions.is_empty() {
+            return Ok(QueryResponse {
+                results: vec![EntityResult {
+                    id: "report:narrative_tensions".to_string(),
+                    entity_type: "report".to_string(),
+                    name: "Narrative Tensions".to_string(),
+                    content: format!(
+                        "No narrative tensions found above severity threshold {:.1}.",
+                        min_severity
+                    ),
+                    confidence: None,
+                    last_modified: None,
+                }],
+                total: 1,
+                next_cursor: None,
+                hints: vec![
+                    "Try lowering min_severity to see more tensions".to_string(),
+                    "Use tension_matrix for perceives-based tension data".to_string(),
+                ],
+                token_estimate: 50,
+                truncated: None,
+            });
+        }
+
+        let mut content_parts = vec![format!(
+            "# Narrative Tensions ({} found, {} high severity)",
+            report.total_count, report.high_severity_count
+        )];
+
+        for (i, tension) in report.tensions.iter().enumerate() {
+            content_parts.push(format!(
+                "\n## {}. {} ↔ {} (severity: {:.2}, type: {})",
+                i + 1,
+                tension.character_a_name,
+                tension.character_b_name,
+                tension.severity,
+                tension.tension_type
+            ));
+            content_parts.push(format!("_{}_", tension.description));
+
+            for signal in &tension.signals {
+                content_parts.push(format!(
+                    "  - [{}] {} (weight: {:.1})",
+                    signal.signal_type, signal.detail, signal.weight
+                ));
+            }
+        }
+
+        let content = content_parts.join("\n");
+        let token_estimate = content.len() / 4 + 50;
+
+        Ok(QueryResponse {
+            results: vec![EntityResult {
+                id: "report:narrative_tensions".to_string(),
+                entity_type: "report".to_string(),
+                name: "Narrative Tensions".to_string(),
+                content,
+                confidence: None,
+                last_modified: None,
+            }],
+            total: 1,
+            next_cursor: None,
+            hints: vec![
+                "Use knowledge_asymmetries for deeper pairwise analysis".to_string(),
+                "Use scene_planning with the tensest pair for scene ideas".to_string(),
+            ],
+            token_estimate,
+            truncated: None,
+        })
+    }
+
+    pub(crate) async fn handle_infer_roles(&self, limit: usize) -> Result<QueryResponse, String> {
+        let service = crate::services::RoleInferenceService::new(self.db.clone());
+        let report = service
+            .infer_roles(limit)
+            .await
+            .map_err(|e| format!("Role inference failed: {}", e))?;
+
+        if report.roles.is_empty() {
+            return Ok(QueryResponse {
+                results: vec![EntityResult {
+                    id: "report:inferred_roles".to_string(),
+                    entity_type: "report".to_string(),
+                    name: "Inferred Narrative Roles".to_string(),
+                    content: "No characters found for role inference.".to_string(),
+                    confidence: None,
+                    last_modified: None,
+                }],
+                total: 1,
+                next_cursor: None,
+                hints: vec!["Create characters first, then run role inference".to_string()],
+                token_estimate: 50,
+                truncated: None,
+            });
+        }
+
+        let mut content_parts = vec![format!(
+            "# Inferred Narrative Roles ({} of {} characters)",
+            report.roles.len(),
+            report.total_characters
+        )];
+
+        content_parts
+            .push("\n| Character | Primary Role | Confidence | Secondary Roles |".to_string());
+        content_parts
+            .push("|-----------|-------------|------------|-----------------|".to_string());
+
+        for role in &report.roles {
+            let secondary = if role.secondary_roles.is_empty() {
+                "-".to_string()
+            } else {
+                role.secondary_roles.join(", ")
+            };
+            content_parts.push(format!(
+                "| {} | {} | {:.2} | {} |",
+                role.character_name, role.primary_role, role.confidence, secondary
+            ));
+        }
+
+        // Add detail section for top characters
+        let detail_count = report.roles.len().min(5);
+        for role in report.roles.iter().take(detail_count) {
+            if role.evidence.is_empty() {
+                continue;
+            }
+            content_parts.push(format!(
+                "\n### {} — {} (confidence: {:.2})",
+                role.character_name, role.primary_role, role.confidence
+            ));
+            for ev in &role.evidence {
+                content_parts.push(format!(
+                    "  - [{}] {} (weight: {:.1})",
+                    ev.signal, ev.detail, ev.weight
+                ));
+            }
+        }
+
+        let content = content_parts.join("\n");
+        let token_estimate = content.len() / 4 + 50;
+
+        Ok(QueryResponse {
+            results: vec![EntityResult {
+                id: "report:inferred_roles".to_string(),
+                entity_type: "report".to_string(),
+                name: "Inferred Narrative Roles".to_string(),
+                content,
+                confidence: None,
+                last_modified: None,
+            }],
+            total: 1,
+            next_cursor: None,
+            hints: vec![
+                "Use centrality_metrics for raw graph topology analysis".to_string(),
+                "Use character_dossier for deep dives on specific characters".to_string(),
+            ],
+            token_estimate,
+            truncated: None,
+        })
+    }
+
     pub(crate) async fn handle_character_voice(
         &self,
         character_id: &str,
     ) -> Result<QueryResponse, String> {
+        validate_entity_id(character_id).map_err(|e| e.to_string())?;
         // Get character details
         #[derive(Deserialize)]
         struct CharacterRow {
@@ -875,15 +1269,15 @@ impl NarraServer {
         } else {
             for c in &certainty_dist {
                 let speech_style = match c.certainty.as_str() {
-                    "Knows" => "Speaks factually and with authority",
-                    "Suspects" => "Uses hedging language: 'I think', 'maybe', 'it seems'",
-                    "BelievesWrongly" => {
+                    "knows" => "Speaks factually and with authority",
+                    "suspects" => "Uses hedging language: 'I think', 'maybe', 'it seems'",
+                    "believes_wrongly" => {
                         "Speaks confidently but INCORRECTLY — dramatic irony potential"
                     }
-                    "Uncertain" => "Qualified statements, questions, seeking confirmation",
-                    "Assumes" => "States opinions as fact without evidence",
-                    "Denies" => "Actively pushes back, uses negation and dismissal",
-                    "Forgotten" => "Vague references, 'I used to know', gaps in conversation",
+                    "uncertain" => "Qualified statements, questions, seeking confirmation",
+                    "assumes" => "States opinions as fact without evidence",
+                    "denies" => "Actively pushes back, uses negation and dismissal",
+                    "forgotten" => "Vague references, 'I used to know', gaps in conversation",
                     _ => "General speech pattern",
                 };
                 content_parts.push(format!(

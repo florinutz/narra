@@ -322,7 +322,11 @@ impl NarraServer {
         &self,
         entity_type: &str,
         limit: usize,
+        progress: std::sync::Arc<dyn crate::services::progress::ProgressReporter>,
     ) -> Result<QueryResponse, String> {
+        progress
+            .report(0.0, 1.0, Some(format!("Loading {} overview", entity_type)))
+            .await;
         // List entities of given type (repository methods return all, we apply limit here)
         let mut entity_results: Vec<EntityResult> = match entity_type.to_lowercase().as_str() {
             "character" => {
@@ -411,6 +415,9 @@ impl NarraServer {
 
         let total = entity_results.len();
         let token_estimate = entity_results.len() * 80;
+        progress
+            .report(1.0, 1.0, Some("Overview complete".into()))
+            .await;
 
         Ok(QueryResponse {
             results: entity_results,

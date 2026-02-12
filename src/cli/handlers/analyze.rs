@@ -4,8 +4,8 @@ use anyhow::Result;
 use serde::Serialize;
 
 use crate::cli::output::{
-    output_json, output_json_list, print_header, print_hint, print_kv, print_success, print_table,
-    OutputMode,
+    output_json, output_json_list, print_error, print_header, print_hint, print_kv, print_success,
+    print_table, OutputMode,
 };
 use crate::cli::resolve::resolve_single;
 use crate::init::AppContext;
@@ -13,7 +13,7 @@ use crate::repository::KnowledgeRepository;
 use crate::services::{
     generate_suggested_fix, CentralityMetric, ClusteringService, CompositeIntelligenceService,
     EntityType, GraphAnalyticsService, InfluenceService, IronyService, PhaseWeights,
-    TemporalService, VectorOpsService,
+    RoleInferenceService, TemporalService, TensionService, VectorOpsService,
 };
 
 pub async fn handle_centrality(
@@ -329,6 +329,118 @@ pub async fn handle_tensions(ctx: &AppContext, limit: usize, mode: OutputMode) -
     Ok(())
 }
 
+pub async fn handle_narrative_tensions(
+    ctx: &AppContext,
+    min_severity: f32,
+    limit: usize,
+    mode: OutputMode,
+) -> Result<()> {
+    let service = TensionService::new(ctx.db.clone());
+    let report = service.detect_tensions(limit, min_severity).await?;
+
+    if mode == OutputMode::Json {
+        output_json(&report);
+    } else {
+        print_header(&format!(
+            "Narrative tensions: {} found ({} high severity)",
+            report.total_count, report.high_severity_count,
+        ));
+
+        if report.tensions.is_empty() {
+            print_hint("No narrative tensions detected. Add relationships, knowledge, and perceptions to see structural conflicts.");
+            return Ok(());
+        }
+
+        let rows: Vec<Vec<String>> = report
+            .tensions
+            .iter()
+            .map(|t| {
+                let signals_summary: String = t
+                    .signals
+                    .iter()
+                    .map(|s| s.signal_type.clone())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                vec![
+                    t.character_a_name.clone(),
+                    t.character_b_name.clone(),
+                    t.tension_type.clone(),
+                    format!("{:.2}", t.severity),
+                    signals_summary,
+                ]
+            })
+            .collect();
+        print_table(
+            &["Character A", "Character B", "Type", "Severity", "Signals"],
+            rows,
+        );
+
+        // Show detail for top 3
+        for t in report.tensions.iter().take(3) {
+            println!();
+            print_kv("Tension", &t.description);
+            for s in &t.signals {
+                print_kv(&format!("  {}", s.signal_type), &s.detail);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+pub async fn handle_roles(ctx: &AppContext, limit: usize, mode: OutputMode) -> Result<()> {
+    let service = RoleInferenceService::new(ctx.db.clone());
+    let report = service.infer_roles(limit).await?;
+
+    if mode == OutputMode::Json {
+        output_json(&report);
+    } else {
+        print_header(&format!(
+            "Inferred roles for {} characters",
+            report.total_characters,
+        ));
+
+        if report.roles.is_empty() {
+            print_hint("No characters found. Create characters with relationships and knowledge for role inference.");
+            return Ok(());
+        }
+
+        let rows: Vec<Vec<String>> = report
+            .roles
+            .iter()
+            .map(|r| {
+                vec![
+                    r.character_name.clone(),
+                    r.primary_role.clone(),
+                    format!("{:.0}%", r.confidence * 100.0),
+                    r.secondary_roles.join(", "),
+                ]
+            })
+            .collect();
+        print_table(
+            &["Character", "Primary Role", "Confidence", "Secondary Roles"],
+            rows,
+        );
+
+        // Show evidence for top 5
+        for r in report.roles.iter().take(5) {
+            if r.evidence.is_empty() {
+                continue;
+            }
+            println!();
+            print_kv(
+                &r.character_name,
+                &format!("{} ({}%)", r.primary_role, (r.confidence * 100.0) as i32),
+            );
+            for e in &r.evidence {
+                print_kv(&format!("  {}", e.signal), &e.detail);
+            }
+        }
+    }
+
+    Ok(())
+}
+
 pub async fn handle_arc_drift(
     ctx: &AppContext,
     entity_type: Option<&str>,
@@ -455,10 +567,11 @@ pub async fn handle_situation_report(ctx: &AppContext, mode: OutputMode) -> Resu
         output_json(&report);
     } else {
         println!(
-            "Narrative Situation Report — {} irony highlights, {} conflicts, {} high-tension pairs, {} themes",
+            "Narrative Situation Report — {} irony highlights, {} conflicts, {} tension pairs, {} narrative tensions, {} themes",
             report.irony_highlights.len(),
             report.knowledge_conflicts.len(),
             report.high_tension_pairs.len(),
+            report.narrative_tensions.len(),
             report.theme_count
         );
 
@@ -513,6 +626,33 @@ pub async fn handle_situation_report(ctx: &AppContext, mode: OutputMode) -> Resu
             print_table(&["Observer", "Target", "Tension", "Feelings"], rows);
         }
 
+        if !report.narrative_tensions.is_empty() {
+            println!("\nNarrative Tensions:");
+            let rows: Vec<Vec<String>> = report
+                .narrative_tensions
+                .iter()
+                .map(|t| {
+                    vec![
+                        t.character_a_name.clone(),
+                        t.character_b_name.clone(),
+                        t.tension_type.clone(),
+                        format!("{:.2}", t.severity),
+                        t.description.clone(),
+                    ]
+                })
+                .collect();
+            print_table(
+                &[
+                    "Character A",
+                    "Character B",
+                    "Type",
+                    "Severity",
+                    "Description",
+                ],
+                rows,
+            );
+        }
+
         if !report.suggestions.is_empty() {
             println!("\nSuggestions:");
             for s in &report.suggestions {
@@ -526,10 +666,29 @@ pub async fn handle_situation_report(ctx: &AppContext, mode: OutputMode) -> Resu
 
 pub async fn handle_dossier(ctx: &AppContext, character: &str, mode: OutputMode) -> Result<()> {
     let service = CompositeIntelligenceService::new(ctx.db.clone());
-    let dossier = service
+    let mut dossier = service
         .character_dossier(character)
         .await
         .map_err(|e| anyhow::anyhow!("Character dossier failed: {}", e))?;
+
+    // Enrich with ML annotations (best-effort)
+    let full_id = if character.contains(':') {
+        character.to_string()
+    } else {
+        format!("character:{}", character)
+    };
+    if let Ok((text, _)) = fetch_entity_text(ctx, &full_id).await {
+        if ctx.emotion_service.is_available() {
+            dossier.emotion_profile = ctx.emotion_service.get_emotions(&full_id, &text).await.ok();
+        }
+        if ctx.theme_service.is_available() {
+            dossier.theme_tags = ctx
+                .theme_service
+                .get_themes(&full_id, &text, None)
+                .await
+                .ok();
+        }
+    }
 
     if mode == OutputMode::Json {
         output_json(&dossier);
@@ -543,6 +702,16 @@ pub async fn handle_dossier(ctx: &AppContext, character: &str, mode: OutputMode)
                 dossier.roles.join(", ")
             }
         );
+        if let Some(inferred) = &dossier.inferred_roles {
+            println!(
+                "Inferred role: {} ({}%)",
+                inferred.primary_role,
+                (inferred.confidence * 100.0) as i32
+            );
+            if !inferred.secondary_roles.is_empty() {
+                println!("Secondary: {}", inferred.secondary_roles.join(", "));
+            }
+        }
         println!(
             "Centrality rank: {}",
             dossier
@@ -646,6 +815,44 @@ pub async fn handle_scene_prep(
             for f in &plan.applicable_facts {
                 println!("  - {}", f);
             }
+        }
+
+        if !plan.narrative_tensions.is_empty() {
+            println!("\nNarrative Tensions:");
+            let rows: Vec<Vec<String>> = plan
+                .narrative_tensions
+                .iter()
+                .map(|t| {
+                    vec![
+                        format!("{} <-> {}", t.character_a_name, t.character_b_name),
+                        t.tension_type.clone(),
+                        format!("{:.0}%", t.severity * 100.0),
+                        t.description.clone(),
+                    ]
+                })
+                .collect();
+            print_table(&["Characters", "Type", "Severity", "Description"], rows);
+        }
+
+        if !plan.character_roles.is_empty() {
+            println!("\nCharacter Roles:");
+            let rows: Vec<Vec<String>> = plan
+                .character_roles
+                .iter()
+                .map(|r| {
+                    vec![
+                        r.character_name.clone(),
+                        r.primary_role.clone(),
+                        format!("{}%", (r.confidence * 100.0) as i32),
+                        if r.secondary_roles.is_empty() {
+                            "-".to_string()
+                        } else {
+                            r.secondary_roles.join(", ")
+                        },
+                    ]
+                })
+                .collect();
+            print_table(&["Character", "Role", "Confidence", "Secondary"], rows);
         }
 
         if !plan.opportunities.is_empty() {
@@ -1768,6 +1975,218 @@ pub async fn handle_transitions(
         print_hint(
             "Bridge entities are characters, events, or locations that connect narrative arcs",
         );
+    }
+
+    Ok(())
+}
+
+// =============================================================================
+// ML annotation commands
+// =============================================================================
+
+/// Fetch composite text for an entity from the DB.
+/// Falls back to name/title/fact fields if composite_text is absent.
+async fn fetch_entity_text(ctx: &AppContext, entity_id: &str) -> Result<(String, String)> {
+    #[derive(serde::Deserialize)]
+    struct TextRow {
+        composite_text: Option<String>,
+        name: Option<String>,
+        title: Option<String>,
+        fact: Option<String>,
+        description: Option<String>,
+    }
+
+    let mut resp = ctx
+        .db
+        .query(format!(
+            "SELECT composite_text, name, title, fact, description FROM {} LIMIT 1",
+            entity_id
+        ))
+        .await
+        .map_err(|e| anyhow::anyhow!("Entity lookup failed: {}", e))?;
+
+    let entity: Option<TextRow> = resp
+        .take(0)
+        .map_err(|e| anyhow::anyhow!("Failed to parse entity: {}", e))?;
+
+    let entity = entity.ok_or_else(|| anyhow::anyhow!("Entity not found: {}", entity_id))?;
+
+    let display = entity
+        .name
+        .as_deref()
+        .or(entity.title.as_deref())
+        .unwrap_or(entity_id)
+        .to_string();
+
+    let text = entity
+        .composite_text
+        .or(entity.description)
+        .or(entity.name)
+        .or(entity.title)
+        .or(entity.fact)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "No text content for {}. Run 'narra world backfill' first.",
+                entity_id
+            )
+        })?;
+
+    Ok((text, display))
+}
+
+pub async fn handle_emotions_cli(
+    ctx: &AppContext,
+    entity: &str,
+    mode: OutputMode,
+    no_semantic: bool,
+) -> Result<()> {
+    if !ctx.emotion_service.is_available() {
+        print_error("Emotion classifier not available (GoEmotions model not downloaded)");
+        print_hint("The model downloads automatically on first use when network is available");
+        anyhow::bail!("Emotion classifier not available");
+    }
+
+    let entity_id = resolve_single(ctx, entity, no_semantic).await?;
+    let (text, display) = fetch_entity_text(ctx, &entity_id).await?;
+
+    let output = ctx
+        .emotion_service
+        .get_emotions(&entity_id, &text)
+        .await
+        .map_err(|e| anyhow::anyhow!("Emotion classification failed: {}", e))?;
+
+    if mode == OutputMode::Json {
+        output_json(&output);
+    } else {
+        print_header(&format!("Emotions: {}", display));
+        print_kv("Dominant", &output.dominant);
+        print_kv("Active emotions", &output.active_count.to_string());
+
+        let display_count = output.active_count.max(5).min(output.scores.len());
+        let rows: Vec<Vec<String>> = output
+            .scores
+            .iter()
+            .take(display_count)
+            .map(|s| {
+                vec![
+                    s.label.clone(),
+                    format!("{:.3}", s.score),
+                    if s.score >= 0.3 {
+                        "***".to_string()
+                    } else {
+                        String::new()
+                    },
+                ]
+            })
+            .collect();
+        print_table(&["Emotion", "Score", "Active"], rows);
+    }
+
+    Ok(())
+}
+
+pub async fn handle_entity_themes_cli(
+    ctx: &AppContext,
+    entity: &str,
+    custom_themes: Option<Vec<String>>,
+    mode: OutputMode,
+    no_semantic: bool,
+) -> Result<()> {
+    if !ctx.theme_service.is_available() {
+        print_error("Theme classifier not available (NLI model not downloaded)");
+        print_hint("The model downloads automatically on first use when network is available");
+        anyhow::bail!("Theme classifier not available");
+    }
+
+    let entity_id = resolve_single(ctx, entity, no_semantic).await?;
+    let (text, display) = fetch_entity_text(ctx, &entity_id).await?;
+
+    let themes_ref = custom_themes.as_deref();
+    let output = ctx
+        .theme_service
+        .get_themes(&entity_id, &text, themes_ref)
+        .await
+        .map_err(|e| anyhow::anyhow!("Theme classification failed: {}", e))?;
+
+    if mode == OutputMode::Json {
+        output_json(&output);
+    } else {
+        print_header(&format!("Themes: {}", display));
+        print_kv("Dominant", &output.dominant);
+        print_kv("Active themes", &output.active_count.to_string());
+
+        let display_count = output.active_count.max(5).min(output.themes.len());
+        let rows: Vec<Vec<String>> = output
+            .themes
+            .iter()
+            .take(display_count)
+            .map(|s| {
+                vec![
+                    s.label.clone(),
+                    format!("{:.3}", s.score),
+                    if s.score >= 0.5 {
+                        "***".to_string()
+                    } else {
+                        String::new()
+                    },
+                ]
+            })
+            .collect();
+        print_table(&["Theme", "Score", "Active"], rows);
+
+        if custom_themes.is_none() {
+            print_hint("Use --themes to test custom themes: narra analyze entity-themes <entity> --themes love,betrayal,power");
+        }
+    }
+
+    Ok(())
+}
+
+pub async fn handle_extract_entities_cli(
+    ctx: &AppContext,
+    entity: &str,
+    mode: OutputMode,
+    no_semantic: bool,
+) -> Result<()> {
+    if !ctx.ner_service.is_available() {
+        print_error("NER model not available (BERT NER model not downloaded)");
+        print_hint("The model downloads automatically on first use when network is available");
+        anyhow::bail!("NER model not available");
+    }
+
+    let entity_id = resolve_single(ctx, entity, no_semantic).await?;
+    let (text, display) = fetch_entity_text(ctx, &entity_id).await?;
+
+    let output = ctx
+        .ner_service
+        .get_entities(&entity_id, &text)
+        .await
+        .map_err(|e| anyhow::anyhow!("NER extraction failed: {}", e))?;
+
+    if mode == OutputMode::Json {
+        output_json(&output);
+    } else {
+        print_header(&format!("Named Entities: {}", display));
+        print_kv("Total found", &output.entity_count.to_string());
+
+        if output.entities.is_empty() {
+            print_hint("No named entities found in this entity's text.");
+            return Ok(());
+        }
+
+        let rows: Vec<Vec<String>> = output
+            .entities
+            .iter()
+            .map(|e| {
+                vec![
+                    e.text.clone(),
+                    e.label.clone(),
+                    format!("{:.3}", e.score),
+                    format!("{}..{}", e.start, e.end),
+                ]
+            })
+            .collect();
+        print_table(&["Entity", "Type", "Confidence", "Span"], rows);
     }
 
     Ok(())

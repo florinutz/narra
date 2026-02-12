@@ -134,7 +134,7 @@ Modern unified interface (no legacy commands):
 
 - Use `gh` CLI for all GitHub operations (PRs, issues, action runs, etc.)
 - Never commit or push — leave that to me
-- Before considering any work item done, run the appropriate tests based on change scope:
+- Before considering any work item done, ensure the feature is covered with (ideally, if it applies to the change scope, integration) tests (but also unit if you see the value), and at the end also run the appropriate tests based on change scope:
   - Formatting/lint-only changes → `make quick-check`
   - Code changes that could affect tests → `make quick-check` + `cargo test`
   - Embedding/vector/semantic code touched → also `make test-embedding`

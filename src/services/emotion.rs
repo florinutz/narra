@@ -224,10 +224,7 @@ mod tests {
 
     #[test]
     fn test_to_emotion_output_dominant_is_highest() {
-        let scores = vec![
-            ("fear".to_string(), 0.8),
-            ("joy".to_string(), 0.2),
-        ];
+        let scores = vec![("fear".to_string(), 0.8), ("joy".to_string(), 0.2)];
         let output = to_emotion_output(scores);
         assert_eq!(output.dominant, "fear");
     }
@@ -236,8 +233,8 @@ mod tests {
     fn test_to_emotion_output_active_count_threshold() {
         let scores = vec![
             ("joy".to_string(), 0.9),
-            ("anger".to_string(), 0.3),    // exactly at threshold — should be active
-            ("sadness".to_string(), 0.29),  // below threshold — not active
+            ("anger".to_string(), 0.3), // exactly at threshold — should be active
+            ("sadness".to_string(), 0.29), // below threshold — not active
             ("fear".to_string(), 0.01),
         ];
         let output = to_emotion_output(scores);
@@ -254,10 +251,7 @@ mod tests {
 
     #[test]
     fn test_to_emotion_output_all_below_threshold() {
-        let scores = vec![
-            ("joy".to_string(), 0.1),
-            ("sadness".to_string(), 0.05),
-        ];
+        let scores = vec![("joy".to_string(), 0.1), ("sadness".to_string(), 0.05)];
         let output = to_emotion_output(scores);
         assert_eq!(output.active_count, 0);
         assert_eq!(output.dominant, "joy"); // still the highest, even if below threshold
@@ -276,10 +270,7 @@ mod tests {
 
     #[test]
     fn test_to_emotion_output_nan_handling() {
-        let scores = vec![
-            ("joy".to_string(), f32::NAN),
-            ("sadness".to_string(), 0.5),
-        ];
+        let scores = vec![("joy".to_string(), f32::NAN), ("sadness".to_string(), 0.5)];
         // Should not panic — NaN treated as Equal in sort
         let output = to_emotion_output(scores);
         assert_eq!(output.scores.len(), 2);
@@ -311,12 +302,81 @@ mod tests {
         assert!(!service.is_available());
     }
 
+    // -- Property-based tests --
+
+    mod prop_tests {
+        use super::*;
+        use proptest::prelude::*;
+
+        fn arb_scores() -> impl Strategy<Value = Vec<(String, f32)>> {
+            proptest::collection::vec(("[a-z]{3,10}", 0.0f32..=1.0f32), 0..20)
+        }
+
+        proptest! {
+            #[test]
+            fn prop_output_sorted_descending(scores in arb_scores()) {
+                let output = to_emotion_output(scores);
+                for window in output.scores.windows(2) {
+                    prop_assert!(
+                        window[0].score >= window[1].score
+                            || window[0].score.is_nan()
+                            || window[1].score.is_nan(),
+                        "Scores must be sorted descending"
+                    );
+                }
+            }
+
+            #[test]
+            fn prop_output_length_preserved(scores in arb_scores()) {
+                let n = scores.len();
+                let output = to_emotion_output(scores);
+                prop_assert_eq!(output.scores.len(), n);
+            }
+
+            #[test]
+            fn prop_active_count_correct(scores in arb_scores()) {
+                let output = to_emotion_output(scores);
+                let expected = output.scores.iter().filter(|s| s.score >= EMOTION_THRESHOLD).count();
+                prop_assert_eq!(output.active_count, expected);
+            }
+
+            #[test]
+            fn prop_dominant_is_first_or_neutral(scores in arb_scores()) {
+                let output = to_emotion_output(scores);
+                if output.scores.is_empty() {
+                    prop_assert_eq!(output.dominant, "neutral");
+                } else {
+                    prop_assert_eq!(output.dominant, output.scores[0].label.clone());
+                }
+            }
+
+            #[test]
+            fn prop_idempotent(scores in arb_scores()) {
+                let output1 = to_emotion_output(scores.clone());
+                // Re-run on the output scores (simulate reprocessing)
+                let re_input: Vec<(String, f32)> = output1.scores.iter()
+                    .map(|s| (s.label.clone(), s.score))
+                    .collect();
+                let output2 = to_emotion_output(re_input);
+                prop_assert_eq!(output1.dominant, output2.dominant);
+                prop_assert_eq!(output1.active_count, output2.active_count);
+                prop_assert_eq!(output1.scores.len(), output2.scores.len());
+            }
+        }
+    }
+
     #[test]
     fn test_emotion_output_serialization_roundtrip() {
         let output = EmotionOutput {
             scores: vec![
-                EmotionScore { label: "joy".to_string(), score: 0.9 },
-                EmotionScore { label: "anger".to_string(), score: 0.3 },
+                EmotionScore {
+                    label: "joy".to_string(),
+                    score: 0.9,
+                },
+                EmotionScore {
+                    label: "anger".to_string(),
+                    score: 0.3,
+                },
             ],
             dominant: "joy".to_string(),
             active_count: 2,

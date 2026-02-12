@@ -212,6 +212,21 @@ async fn explore_character(
             dossier.roles.join(", ")
         },
     );
+    if let Some(inferred) = &dossier.inferred_roles {
+        print_kv(
+            "Inferred role",
+            &format!(
+                "{} ({}%){}",
+                inferred.primary_role,
+                (inferred.confidence * 100.0) as i32,
+                if inferred.secondary_roles.is_empty() {
+                    String::new()
+                } else {
+                    format!(" + {}", inferred.secondary_roles.join(", "))
+                }
+            ),
+        );
+    }
     print_kv(
         "Centrality",
         &dossier
@@ -305,6 +320,68 @@ async fn explore_character(
         print_table(&["Observer", "Tension", "Feelings"], rows);
     }
 
+    // === Narrative Tensions ===
+    if !dossier.narrative_tensions.is_empty() {
+        print_section(
+            &format!("Narrative Tensions ({})", dossier.narrative_tensions.len()),
+            "",
+        );
+        let rows: Vec<Vec<String>> = dossier
+            .narrative_tensions
+            .iter()
+            .map(|t| {
+                let other = if t.character_a_name == display_name {
+                    &t.character_b_name
+                } else {
+                    &t.character_a_name
+                };
+                vec![
+                    other.to_string(),
+                    t.tension_type.clone(),
+                    format!("{:.0}%", t.severity * 100.0),
+                    t.description.clone(),
+                ]
+            })
+            .collect();
+        print_table(&["With", "Type", "Severity", "Description"], rows);
+    }
+
+    // === Emotion Profile ===
+    if ctx.emotion_service.is_available() {
+        if let Some(text) = fetch_composite_text(ctx, entity_id).await {
+            if let Ok(emotions) = ctx.emotion_service.get_emotions(entity_id, &text).await {
+                if emotions.active_count > 0 {
+                    print_section(&format!("Emotion Profile ({})", emotions.dominant), "");
+                    let rows: Vec<Vec<String>> = emotions
+                        .scores
+                        .iter()
+                        .take(emotions.active_count.max(3))
+                        .map(|s| vec![s.label.clone(), format!("{:.3}", s.score)])
+                        .collect();
+                    print_table(&["Emotion", "Score"], rows);
+                }
+            }
+        }
+    }
+
+    // === Theme Tags ===
+    if ctx.theme_service.is_available() {
+        if let Some(text) = fetch_composite_text(ctx, entity_id).await {
+            if let Ok(themes) = ctx.theme_service.get_themes(entity_id, &text, None).await {
+                if themes.active_count > 0 {
+                    print_section(&format!("Theme Tags ({})", themes.dominant), "");
+                    let rows: Vec<Vec<String>> = themes
+                        .themes
+                        .iter()
+                        .take(themes.active_count.max(3))
+                        .map(|s| vec![s.label.clone(), format!("{:.3}", s.score)])
+                        .collect();
+                    print_table(&["Theme", "Score"], rows);
+                }
+            }
+        }
+    }
+
     // === Similar Entities ===
     if !no_similar && !no_semantic && ctx.embedding_service.is_available() {
         show_similar(ctx, entity_id, display_name, "character").await;
@@ -393,6 +470,29 @@ async fn explore_generic(
     }
 
     Ok(())
+}
+
+/// Fetch composite_text for an entity, falling back to name/title/description.
+async fn fetch_composite_text(ctx: &AppContext, entity_id: &str) -> Option<String> {
+    #[derive(serde::Deserialize)]
+    struct TextRow {
+        composite_text: Option<String>,
+        name: Option<String>,
+        title: Option<String>,
+        description: Option<String>,
+    }
+
+    let mut resp = ctx
+        .db
+        .query(format!(
+            "SELECT composite_text, name, title, description FROM {} LIMIT 1",
+            entity_id
+        ))
+        .await
+        .ok()?;
+
+    let entity: Option<TextRow> = resp.take(0).ok().flatten();
+    entity.and_then(|e| e.composite_text.or(e.description).or(e.name).or(e.title))
 }
 
 /// Show similar entities section using semantic search.

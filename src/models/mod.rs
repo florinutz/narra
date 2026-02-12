@@ -10,7 +10,10 @@ pub mod phase;
 pub mod relationship;
 pub mod scene;
 
-pub use annotation::{Annotation, AnnotationCreate, EmotionOutput, EmotionScore};
+pub use annotation::{
+    Annotation, AnnotationCreate, EmotionOutput, EmotionScore, NerEntity, NerOutput, ThemeOutput,
+    ThemeScore,
+};
 pub use character::{Character, CharacterCreate, CharacterUpdate};
 pub use event::{Event, EventCreate, EventUpdate};
 pub use fact::{

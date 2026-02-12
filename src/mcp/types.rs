@@ -594,6 +594,44 @@ pub enum QueryRequest {
         /// Entity ID (e.g., "character:alice", "event:betrayal")
         entity_id: String,
     },
+    /// Classify narrative themes present in an entity's text using zero-shot NLI.
+    /// Returns theme labels with entailment scores. Default themes are narrative
+    /// archetypes (love, betrayal, power, etc.). Custom themes can be supplied.
+    /// Uses cached annotations for default themes.
+    Themes {
+        /// Entity ID (e.g., "character:alice", "scene:confrontation")
+        entity_id: String,
+        /// Optional custom themes to classify against. If omitted, uses default
+        /// narrative themes (love, betrayal, revenge, identity, power, etc.)
+        #[serde(default)]
+        themes: Option<Vec<String>>,
+    },
+    /// Extract named entities (persons, locations, organizations) from an entity's text.
+    /// Uses BERT-based NER with BIO tagging. Results are cached as annotations.
+    ExtractEntities {
+        /// Entity ID (e.g., "scene:confrontation", "event:betrayal")
+        entity_id: String,
+    },
+    /// Detect narrative tensions between characters using profile analysis,
+    /// knowledge contradictions, and conflicting loyalties.
+    /// Goes beyond the perceives-based tension_matrix to find structural tensions.
+    NarrativeTensions {
+        /// Maximum tensions to return (default: 20)
+        #[serde(default)]
+        limit: Option<usize>,
+        /// Minimum severity threshold 0.0–1.0 (default: 0.0)
+        #[serde(default)]
+        min_severity: Option<f32>,
+    },
+    /// Infer narrative roles for characters based on graph topology,
+    /// knowledge patterns, relationship types, and profile traits.
+    /// Returns richer roles than basic centrality: mentor, enigma, deceived,
+    /// keeper_of_secrets, antagonist, bridge, information_broker, etc.
+    InferRoles {
+        /// Maximum characters to return (default: 20)
+        #[serde(default)]
+        limit: Option<usize>,
+    },
     /// Identify entities that bridge multiple narrative phases.
     /// These "transition points" are characters, events, or locations
     /// that connect different arcs in the story.
@@ -1071,6 +1109,31 @@ pub enum MutationRequest {
     },
     /// Clear all saved phases from database.
     ClearPhases,
+    /// Run ML annotation pipeline on all entities of the specified types.
+    /// Annotates entities with emotion, theme, and NER classifiers in parallel.
+    /// Results are cached as annotations in the database.
+    AnnotateEntities {
+        /// Entity types to annotate (e.g. ["character", "event", "scene"]).
+        /// Defaults to ["character", "event", "scene"] if omitted.
+        #[serde(default)]
+        entity_types: Option<Vec<String>>,
+        /// Whether to run emotion classification (default: true).
+        #[serde(default = "default_true")]
+        run_emotions: bool,
+        /// Whether to run theme classification (default: true).
+        #[serde(default = "default_true")]
+        run_themes: bool,
+        /// Whether to run named entity recognition (default: true).
+        #[serde(default = "default_true")]
+        run_ner: bool,
+        /// Max concurrency for parallel processing (default: 4).
+        #[serde(default)]
+        concurrency: Option<usize>,
+    },
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// Single entity result.

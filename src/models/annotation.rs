@@ -54,6 +54,48 @@ pub struct EmotionScore {
     pub score: f32,
 }
 
+/// Typed theme classification output (zero-shot NLI).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThemeOutput {
+    /// Theme scores sorted descending by score
+    pub themes: Vec<ThemeScore>,
+    /// Label of the highest-scoring theme
+    pub dominant: String,
+    /// Number of themes above the activation threshold
+    pub active_count: usize,
+}
+
+/// A single theme label and its entailment score.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThemeScore {
+    pub label: String,
+    pub score: f32,
+}
+
+/// Typed NER extraction output.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NerOutput {
+    /// Extracted entities sorted by position
+    pub entities: Vec<NerEntity>,
+    /// Total number of entities found
+    pub entity_count: usize,
+}
+
+/// A single named entity extracted from text.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NerEntity {
+    /// Entity text as it appears in the input
+    pub text: String,
+    /// Entity type: PER, LOC, ORG, MISC
+    pub label: String,
+    /// Confidence score (0..1, averaged across subword tokens)
+    pub score: f32,
+    /// Character start offset in input text
+    pub start: usize,
+    /// Character end offset in input text
+    pub end: usize,
+}
+
 // ============================================================================
 // Annotation CRUD Operations
 // ============================================================================

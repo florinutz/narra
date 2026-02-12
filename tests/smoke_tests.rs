@@ -23,10 +23,10 @@ async fn create_test_character(server: &NarraServer, name: &str) -> String {
         profile: None,
     };
     let result = server
-        .mutate(Parameters(to_mutation_input(request)))
+        .handle_mutate(Parameters(to_mutation_input(request)))
         .await
         .expect("create character should succeed");
-    result.0.entity.id
+    result.entity.id
 }
 
 // =============================================================================
@@ -47,19 +47,13 @@ async fn smoke_test_query() {
     };
 
     let result = server
-        .query(Parameters(to_query_input(request)))
+        .handle_query(Parameters(to_query_input(request)))
         .await
         .expect("query should succeed");
 
-    assert!(
-        result.0.total > 0,
-        "Overview should find at least one entity"
-    );
-    assert!(
-        !result.0.results.is_empty(),
-        "Overview should return results"
-    );
-    assert_eq!(result.0.results[0].entity_type, "character");
+    assert!(result.total > 0, "Overview should find at least one entity");
+    assert!(!result.results.is_empty(), "Overview should return results");
+    assert_eq!(result.results[0].entity_type, "character");
 }
 
 #[tokio::test]
@@ -77,17 +71,17 @@ async fn smoke_test_mutate() {
     };
 
     let result = server
-        .mutate(Parameters(to_mutation_input(request)))
+        .handle_mutate(Parameters(to_mutation_input(request)))
         .await
         .expect("mutate should succeed");
 
-    assert_eq!(result.0.entity.entity_type, "character");
+    assert_eq!(result.entity.entity_type, "character");
     assert!(
-        result.0.entity.id.starts_with("character:"),
+        result.entity.id.starts_with("character:"),
         "ID should have table prefix"
     );
     assert!(
-        result.0.entity.content.contains("Smoke Test Character"),
+        result.entity.content.contains("Smoke Test Character"),
         "Content should mention the character name"
     );
 }
@@ -106,15 +100,15 @@ async fn smoke_test_analyze_impact_via_query() {
     };
 
     let result = server
-        .query(Parameters(to_query_input(request)))
+        .handle_query(Parameters(to_query_input(request)))
         .await
         .expect("analyze_impact via query should succeed");
 
     assert!(
-        result.0.token_estimate > 0,
+        result.token_estimate > 0,
         "Response should have a token estimate"
     );
-    assert!(!result.0.results.is_empty(), "Should return impact results");
+    assert!(!result.results.is_empty(), "Should return impact results");
 }
 
 #[tokio::test]
@@ -129,12 +123,12 @@ async fn smoke_test_protect_entity_via_mutate() {
     };
 
     let result = server
-        .mutate(Parameters(to_mutation_input(request)))
+        .handle_mutate(Parameters(to_mutation_input(request)))
         .await
         .expect("protect_entity via mutate should succeed");
 
     assert!(
-        result.0.entity.content.contains("protected"),
+        result.entity.content.contains("protected"),
         "Response should confirm protection"
     );
 }
@@ -147,7 +141,7 @@ async fn smoke_test_unprotect_entity_via_mutate() {
     let character_id = create_test_character(&server, "Unprotect Test Character").await;
 
     server
-        .mutate(Parameters(to_mutation_input(
+        .handle_mutate(Parameters(to_mutation_input(
             MutationRequest::ProtectEntity {
                 entity_id: character_id.clone(),
             },
@@ -156,7 +150,7 @@ async fn smoke_test_unprotect_entity_via_mutate() {
         .expect("protect should succeed");
 
     let result = server
-        .mutate(Parameters(to_mutation_input(
+        .handle_mutate(Parameters(to_mutation_input(
             MutationRequest::UnprotectEntity {
                 entity_id: character_id,
             },
@@ -165,10 +159,10 @@ async fn smoke_test_unprotect_entity_via_mutate() {
         .expect("unprotect via mutate should succeed");
 
     assert!(
-        result.0.entity.content.contains("Protection removed")
-            || result.0.entity.content.contains("unprotected"),
+        result.entity.content.contains("Protection removed")
+            || result.entity.content.contains("unprotected"),
         "Response should confirm unprotection, got: {}",
-        result.0.entity.content
+        result.entity.content
     );
 }
 
@@ -302,16 +296,16 @@ async fn smoke_test_validate_entity_via_query() {
     };
 
     let result = server
-        .query(Parameters(to_query_input(request)))
+        .handle_query(Parameters(to_query_input(request)))
         .await
         .expect("validate_entity via query should succeed");
 
     assert!(
-        !result.0.results.is_empty(),
+        !result.results.is_empty(),
         "Validation should return results"
     );
     assert!(
-        result.0.token_estimate > 0,
+        result.token_estimate > 0,
         "Response should have a token estimate"
     );
 }
@@ -329,12 +323,12 @@ async fn smoke_test_investigate_contradictions_via_query() {
     };
 
     let result = server
-        .query(Parameters(to_query_input(request)))
+        .handle_query(Parameters(to_query_input(request)))
         .await
         .expect("investigate_contradictions via query should succeed");
 
     assert!(
-        result.0.token_estimate > 0,
+        result.token_estimate > 0,
         "Response should have a token estimate"
     );
 }
@@ -371,19 +365,16 @@ async fn smoke_test_batch_record_knowledge() {
     };
 
     let result = server
-        .mutate(Parameters(to_mutation_input(request)))
+        .handle_mutate(Parameters(to_mutation_input(request)))
         .await
         .expect("batch record knowledge should succeed");
 
-    assert_eq!(result.0.entity.entity_type, "batch");
-    let entities = result.0.entities.expect("Should have entities list");
+    assert_eq!(result.entity.entity_type, "batch");
+    let entities = result.entities.expect("Should have entities list");
     assert_eq!(entities.len(), 2);
 }
 
-/// Test that structured errors are returned from the boundary methods.
-///
-/// The `query()` and `mutate()` methods return `ToolError` (not plain String)
-/// when handlers fail, with structured error_code and suggestion fields.
+/// Test that structured errors are returned from the handler methods.
 #[tokio::test]
 async fn smoke_test_structured_error_from_query() {
     let harness = TestHarness::new().await;
@@ -394,8 +385,9 @@ async fn smoke_test_structured_error_from_query() {
         detail_level: None,
     };
 
-    // Use the boundary-level method (query, not handle_query) to test ToolError conversion
-    let result = server.query(Parameters(to_query_input(request))).await;
+    let result = server
+        .handle_query(Parameters(to_query_input(request)))
+        .await;
     assert!(result.is_err(), "Lookup of nonexistent should fail");
 }
 
@@ -411,6 +403,8 @@ async fn smoke_test_structured_error_from_mutate() {
         hard: Some(false),
     };
 
-    let result = server.mutate(Parameters(to_mutation_input(request))).await;
+    let result = server
+        .handle_mutate(Parameters(to_mutation_input(request)))
+        .await;
     assert!(result.is_err(), "Soft delete should fail");
 }

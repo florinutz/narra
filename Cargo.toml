@@ -47,6 +47,8 @@ serde_yaml_ng = "0.10"
 indicatif = "0.17"
 clap_complete = "4.5"
 toml = "0.8"
+tokio-stream = "0.1"
+async-stream = "0.3"
 
 [features]
 default = ["metal"]
@@ -65,6 +67,7 @@ strip = true
 tempfile = "3.24.0"
 insta = { version = "1.46", features = ["yaml"] }
 pretty_assertions = "1.4"
+proptest = "1.6"
 
 [lints.clippy]
 redundant_closure_for_method_calls = "allow"

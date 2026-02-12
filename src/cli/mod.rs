@@ -573,6 +573,24 @@ pub enum WorldCommands {
         #[arg(long, default_value = "10")]
         limit: usize,
     },
+    /// Run ML annotation pipeline on entities (emotion, theme, NER)
+    Annotate {
+        /// Entity types to annotate (default: character, event, scene)
+        #[arg(long, name = "type", value_delimiter = ',')]
+        entity_types: Vec<String>,
+        /// Skip emotion classification
+        #[arg(long)]
+        skip_emotions: bool,
+        /// Skip theme classification
+        #[arg(long)]
+        skip_themes: bool,
+        /// Skip named entity recognition
+        #[arg(long)]
+        skip_ner: bool,
+        /// Max concurrency
+        #[arg(long, default_value = "4")]
+        concurrency: usize,
+    },
 }
 
 #[derive(Subcommand)]
@@ -821,6 +839,39 @@ pub enum AnalyzeCommands {
         /// Max results (default: 20)
         #[arg(long, default_value = "20")]
         limit: usize,
+    },
+    /// Deep narrative tension analysis (opposing desires, contradictory knowledge, conflicting loyalties)
+    NarrativeTensions {
+        /// Minimum severity threshold (0.0–1.0, default: 0.0)
+        #[arg(long, default_value = "0.0")]
+        min_severity: f32,
+        /// Max results
+        #[arg(long, default_value = "20")]
+        limit: usize,
+    },
+    /// Infer structural narrative roles from graph topology and knowledge patterns
+    Roles {
+        /// Max characters to analyze
+        #[arg(long, default_value = "20")]
+        limit: usize,
+    },
+    /// Classify emotional tone of an entity (ML-based, GoEmotions 28 labels)
+    Emotions {
+        /// Entity (ID or name)
+        entity: String,
+    },
+    /// Classify narrative themes for an entity (ML zero-shot NLI)
+    EntityThemes {
+        /// Entity (ID or name)
+        entity: String,
+        /// Custom themes to test (comma-separated; defaults to 20 narrative themes)
+        #[arg(long, value_delimiter = ',')]
+        themes: Option<Vec<String>>,
+    },
+    /// Extract named entities (people, locations, organizations) from entity text (ML-based NER)
+    ExtractEntities {
+        /// Entity (ID or name)
+        entity: String,
     },
     /// Identify entities that bridge narrative phases (arc transition points)
     Transitions {
@@ -1312,6 +1363,24 @@ pub async fn execute(
                 handlers::world::handle_benchmark(ctx, model, queries, *sample, *limit, mode)
                     .await?
             }
+            WorldCommands::Annotate {
+                entity_types,
+                skip_emotions,
+                skip_themes,
+                skip_ner,
+                concurrency,
+            } => {
+                handlers::world::handle_annotate(
+                    ctx,
+                    entity_types,
+                    *skip_emotions,
+                    *skip_themes,
+                    *skip_ner,
+                    *concurrency,
+                    mode,
+                )
+                .await?
+            }
         },
 
         // =====================================================================
@@ -1567,6 +1636,33 @@ pub async fn execute(
                     no_semantic,
                 )
                 .await?
+            }
+            AnalyzeCommands::NarrativeTensions {
+                min_severity,
+                limit,
+            } => {
+                handlers::analyze::handle_narrative_tensions(ctx, *min_severity, *limit, mode)
+                    .await?
+            }
+            AnalyzeCommands::Roles { limit } => {
+                handlers::analyze::handle_roles(ctx, *limit, mode).await?
+            }
+            AnalyzeCommands::Emotions { entity } => {
+                handlers::analyze::handle_emotions_cli(ctx, entity, mode, no_semantic).await?
+            }
+            AnalyzeCommands::EntityThemes { entity, themes } => {
+                handlers::analyze::handle_entity_themes_cli(
+                    ctx,
+                    entity,
+                    themes.clone(),
+                    mode,
+                    no_semantic,
+                )
+                .await?
+            }
+            AnalyzeCommands::ExtractEntities { entity } => {
+                handlers::analyze::handle_extract_entities_cli(ctx, entity, mode, no_semantic)
+                    .await?
             }
             AnalyzeCommands::Transitions {
                 types,

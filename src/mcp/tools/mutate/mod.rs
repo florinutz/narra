@@ -195,6 +195,22 @@ impl NarraServer {
                 .await
             }
             MutationRequest::ClearPhases => self.handle_clear_phases().await,
+            MutationRequest::AnnotateEntities {
+                entity_types,
+                run_emotions,
+                run_themes,
+                run_ner,
+                concurrency,
+            } => {
+                self.handle_annotate_entities(
+                    entity_types,
+                    run_emotions,
+                    run_themes,
+                    run_ner,
+                    concurrency,
+                )
+                .await
+            }
         }
     }
 

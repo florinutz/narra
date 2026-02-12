@@ -287,6 +287,450 @@ impl CrossEncoderReranker {
     }
 }
 
+/// Natural Language Inference classifier using RoBERTa/XLM-RoBERTa.
+///
+/// Classifies premise-hypothesis pairs into entailment/neutral/contradiction.
+/// Used for zero-shot theme classification: given a text and a candidate theme,
+/// the entailment probability indicates how strongly the text matches the theme.
+pub struct NliClassifier {
+    model: XLMRobertaForSequenceClassification,
+    tokenizer: Tokenizer,
+    device: Device,
+    entailment_idx: usize,
+}
+
+impl NliClassifier {
+    /// Load an NLI classifier from downloaded model files.
+    ///
+    /// Parses `id2label` from config.json to determine the entailment label index.
+    pub fn new(files: &ModelFiles, device: Device) -> Result<Self> {
+        let config_str =
+            std::fs::read_to_string(&files.config_path).context("Failed to read NLI config")?;
+        let config: XLMRobertaConfig =
+            serde_json::from_str(&config_str).context("Failed to parse NLI config")?;
+
+        // Parse id2label to find the entailment index
+        let config_json: serde_json::Value =
+            serde_json::from_str(&config_str).context("Failed to parse config as JSON")?;
+        let id2label = config_json
+            .get("id2label")
+            .and_then(|v| v.as_object())
+            .context("config.json missing id2label mapping")?;
+
+        let entailment_idx = id2label
+            .iter()
+            .find_map(|(k, v)| {
+                let label = v.as_str()?;
+                if label.eq_ignore_ascii_case("entailment") {
+                    k.parse::<usize>().ok()
+                } else {
+                    None
+                }
+            })
+            .context("id2label does not contain an 'entailment' label")?;
+
+        let num_labels = id2label.len();
+
+        let mut tokenizer = Tokenizer::from_file(&files.tokenizer_path)
+            .map_err(|e| anyhow::anyhow!("Failed to load NLI tokenizer: {}", e))?;
+
+        tokenizer.with_padding(Some(PaddingParams {
+            strategy: PaddingStrategy::BatchLongest,
+            ..Default::default()
+        }));
+
+        // SAFETY: mmap'd safetensors file — safe as long as the file is not modified
+        // while the model is in use.
+        let vb = unsafe {
+            VarBuilder::from_mmaped_safetensors(&[&files.weights_path], DType::F32, &device)
+                .context("Failed to load NLI weights")?
+        };
+        let model = XLMRobertaForSequenceClassification::new(num_labels, &config, vb)
+            .context("Failed to construct NLI model")?;
+
+        Ok(Self {
+            model,
+            tokenizer,
+            device,
+            entailment_idx,
+        })
+    }
+
+    /// Classify premise-hypothesis pairs.
+    ///
+    /// Returns the entailment probability (0..1) for each pair.
+    /// Batches all pairs in a single forward pass for efficiency.
+    pub fn classify_pairs(&self, pairs: &[(String, String)]) -> Result<Vec<f32>> {
+        if pairs.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let pair_refs: Vec<(&str, &str)> = pairs
+            .iter()
+            .map(|(a, b)| (a.as_str(), b.as_str()))
+            .collect();
+        let encodings = self
+            .tokenizer
+            .encode_batch(pair_refs, true)
+            .map_err(|e| anyhow::anyhow!("NLI tokenization failed: {}", e))?;
+
+        let batch_size = encodings.len();
+        let max_len = encodings
+            .iter()
+            .map(|e| e.get_ids().len())
+            .max()
+            .unwrap_or(0);
+
+        let input_ids: Vec<u32> = encodings
+            .iter()
+            .flat_map(|e| e.get_ids().to_vec())
+            .collect();
+        let attention_mask: Vec<u32> = encodings
+            .iter()
+            .flat_map(|e| e.get_attention_mask().to_vec())
+            .collect();
+
+        let input_ids = Tensor::from_vec(input_ids, (batch_size, max_len), &self.device)?;
+        let attention_mask = Tensor::from_vec(attention_mask, (batch_size, max_len), &self.device)?;
+        // RoBERTa/XLM-RoBERTa doesn't use token_type_ids — pass zeros
+        let token_type_ids = input_ids.zeros_like()?;
+
+        // Forward pass -> [batch, num_labels] logits
+        let logits = self
+            .model
+            .forward(&input_ids, &attention_mask, &token_type_ids)?;
+
+        // Softmax over labels (NLI is single-label, not multi-label)
+        let probs = candle_nn::ops::softmax(&logits, 1)?;
+        let probs_vec = probs.to_vec2::<f32>()?;
+
+        // Extract entailment probability for each pair
+        let entailment_scores: Vec<f32> = probs_vec
+            .into_iter()
+            .map(|row| row.get(self.entailment_idx).copied().unwrap_or(0.0))
+            .collect();
+
+        Ok(entailment_scores)
+    }
+}
+
+/// Token-level classifier using BERT for Named Entity Recognition.
+///
+/// Wraps a `BertModel` with a custom linear classification head for per-token
+/// BIO tagging. Compatible with BERT-based NER models (e.g., dslim/bert-base-NER).
+pub struct TokenClassifier {
+    model: BertModel,
+    classifier_weight: Tensor,
+    classifier_bias: Tensor,
+    tokenizer: Tokenizer,
+    device: Device,
+    num_labels: usize,
+    labels: Vec<String>,
+}
+
+/// A recognized entity extracted by the token classifier.
+#[derive(Debug, Clone)]
+pub struct RecognizedEntity {
+    /// Entity text as it appears in the input
+    pub text: String,
+    /// Entity type (PER, LOC, ORG, MISC)
+    pub label: String,
+    /// Average confidence score across tokens
+    pub score: f32,
+    /// Character start offset in input text
+    pub start: usize,
+    /// Character end offset in input text
+    pub end: usize,
+}
+
+impl TokenClassifier {
+    /// Load a token classifier from downloaded model files.
+    ///
+    /// Loads BERT model weights under the `bert.*` prefix and a separate
+    /// `classifier.*` linear head for per-token label prediction.
+    pub fn new(files: &ModelFiles, device: Device) -> Result<Self> {
+        let config_str = std::fs::read_to_string(&files.config_path)
+            .context("Failed to read token classifier config")?;
+        let config: BertConfig =
+            serde_json::from_str(&config_str).context("Failed to parse BERT config")?;
+
+        // Parse id2label from config.json
+        let config_json: serde_json::Value =
+            serde_json::from_str(&config_str).context("Failed to parse config as JSON")?;
+        let id2label = config_json
+            .get("id2label")
+            .and_then(|v| v.as_object())
+            .context("config.json missing id2label mapping")?;
+
+        let mut label_entries: Vec<(usize, String)> = id2label
+            .iter()
+            .filter_map(|(k, v)| {
+                let idx: usize = k.parse().ok()?;
+                let label = v.as_str()?.to_string();
+                Some((idx, label))
+            })
+            .collect();
+        label_entries.sort_by_key(|(idx, _)| *idx);
+        let labels: Vec<String> = label_entries.into_iter().map(|(_, label)| label).collect();
+        let num_labels = labels.len();
+
+        if num_labels == 0 {
+            anyhow::bail!("id2label is empty — cannot determine label count");
+        }
+
+        let mut tokenizer = Tokenizer::from_file(&files.tokenizer_path)
+            .map_err(|e| anyhow::anyhow!("Failed to load NER tokenizer: {}", e))?;
+
+        tokenizer.with_padding(Some(PaddingParams {
+            strategy: PaddingStrategy::BatchLongest,
+            ..Default::default()
+        }));
+
+        // SAFETY: mmap'd safetensors file — safe as long as the file is not modified.
+        let vb = unsafe {
+            VarBuilder::from_mmaped_safetensors(&[&files.weights_path], DType::F32, &device)
+                .context("Failed to load NER weights")?
+        };
+
+        // Load classifier head weights before BertModel consumes vb
+        let classifier_weight = vb
+            .pp("classifier")
+            .get((num_labels, config.hidden_size), "weight")
+            .context("Failed to load classifier.weight")?;
+        let classifier_bias = vb
+            .pp("classifier")
+            .get(num_labels, "bias")
+            .context("Failed to load classifier.bias")?;
+
+        // NER models use `bert.*` prefix for the base model weights
+        let model = BertModel::load(vb.pp("bert"), &config)
+            .context("Failed to construct BERT model for NER")?;
+
+        Ok(Self {
+            model,
+            classifier_weight,
+            classifier_bias,
+            tokenizer,
+            device,
+            num_labels,
+            labels,
+        })
+    }
+
+    /// Extract named entities from texts.
+    ///
+    /// Runs per-token classification, merges BIO tags into entity spans,
+    /// and maps subword offsets back to original character positions.
+    pub fn extract_entities(&self, texts: &[String]) -> Result<Vec<Vec<RecognizedEntity>>> {
+        if texts.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let str_refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
+        let encodings = self
+            .tokenizer
+            .encode_batch(str_refs, true)
+            .map_err(|e| anyhow::anyhow!("NER tokenization failed: {}", e))?;
+
+        let batch_size = encodings.len();
+        let max_len = encodings
+            .iter()
+            .map(|e| e.get_ids().len())
+            .max()
+            .unwrap_or(0);
+
+        let input_ids: Vec<u32> = encodings
+            .iter()
+            .flat_map(|e| e.get_ids().to_vec())
+            .collect();
+        let attention_mask: Vec<u32> = encodings
+            .iter()
+            .flat_map(|e| e.get_attention_mask().to_vec())
+            .collect();
+        let token_type_ids: Vec<u32> = encodings
+            .iter()
+            .flat_map(|e| e.get_type_ids().to_vec())
+            .collect();
+
+        let input_ids = Tensor::from_vec(input_ids, (batch_size, max_len), &self.device)?;
+        let attention_mask_t =
+            Tensor::from_vec(attention_mask, (batch_size, max_len), &self.device)?;
+        let token_type_ids = Tensor::from_vec(token_type_ids, (batch_size, max_len), &self.device)?;
+
+        // Forward pass through BERT -> [batch, seq_len, hidden_size]
+        let hidden_states =
+            self.model
+                .forward(&input_ids, &token_type_ids, Some(&attention_mask_t))?;
+
+        // Apply classification head: hidden @ W^T + b -> [batch, seq_len, num_labels]
+        let logits = hidden_states
+            .matmul(&self.classifier_weight.t()?)?
+            .broadcast_add(&self.classifier_bias)?;
+
+        // Softmax per token -> probabilities
+        let probs = candle_nn::ops::softmax(&logits, 2)?;
+        let probs_3d = probs.to_vec3::<f32>()?;
+
+        // Post-process: merge BIO tags into entity spans per text
+        let mut all_entities = Vec::with_capacity(batch_size);
+
+        for (batch_idx, encoding) in encodings.iter().enumerate() {
+            let offsets = encoding.get_offsets();
+            let special_tokens = encoding.get_special_tokens_mask();
+            let token_probs = &probs_3d[batch_idx];
+
+            let entities =
+                self.merge_bio_tags(token_probs, offsets, special_tokens, &texts[batch_idx]);
+            all_entities.push(entities);
+        }
+
+        Ok(all_entities)
+    }
+
+    /// Merge BIO-tagged tokens into entity spans.
+    fn merge_bio_tags(
+        &self,
+        token_probs: &[Vec<f32>],
+        offsets: &[(usize, usize)],
+        special_tokens: &[u32],
+        original_text: &str,
+    ) -> Vec<RecognizedEntity> {
+        let mut entities: Vec<RecognizedEntity> = Vec::new();
+        let mut current_entity: Option<(String, usize, usize, Vec<f32>)> = None; // (label, start, end, scores)
+
+        for (tok_idx, probs) in token_probs.iter().enumerate() {
+            // Skip special tokens ([CLS], [SEP], [PAD])
+            if tok_idx >= special_tokens.len() || special_tokens[tok_idx] == 1 {
+                // Flush any pending entity
+                if let Some((label, start, end, scores)) = current_entity.take() {
+                    let avg_score = scores.iter().sum::<f32>() / scores.len() as f32;
+                    let text = original_text[start..end].to_string();
+                    if !text.trim().is_empty() {
+                        entities.push(RecognizedEntity {
+                            text: text.trim().to_string(),
+                            label,
+                            score: avg_score,
+                            start,
+                            end,
+                        });
+                    }
+                }
+                continue;
+            }
+
+            // Skip padding tokens (offsets are (0,0))
+            let (tok_start, tok_end) = offsets[tok_idx];
+            if tok_start == 0 && tok_end == 0 && tok_idx > 0 {
+                continue;
+            }
+
+            // Find best label for this token
+            let (best_idx, best_prob) = probs
+                .iter()
+                .enumerate()
+                .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+                .unwrap_or((0, &0.0));
+
+            let tag = &self.labels[best_idx];
+
+            if let Some(entity_type) = tag.strip_prefix("B-") {
+                // Flush previous entity
+                if let Some((label, start, end, scores)) = current_entity.take() {
+                    let avg_score = scores.iter().sum::<f32>() / scores.len() as f32;
+                    let text = original_text[start..end].to_string();
+                    if !text.trim().is_empty() {
+                        entities.push(RecognizedEntity {
+                            text: text.trim().to_string(),
+                            label,
+                            score: avg_score,
+                            start,
+                            end,
+                        });
+                    }
+                }
+                // Start new entity
+                current_entity = Some((
+                    entity_type.to_string(),
+                    tok_start,
+                    tok_end,
+                    vec![*best_prob],
+                ));
+            } else if let Some(entity_type) = tag.strip_prefix("I-") {
+                // Continue existing entity of matching type
+                if let Some((ref label, _, ref mut end, ref mut scores)) = current_entity {
+                    if label == entity_type {
+                        *end = tok_end;
+                        scores.push(*best_prob);
+                        continue;
+                    }
+                }
+                // Orphan I-tag (no matching B-) — treat as B-
+                if let Some((label, start, end, scores)) = current_entity.take() {
+                    let avg_score = scores.iter().sum::<f32>() / scores.len() as f32;
+                    let text = original_text[start..end].to_string();
+                    if !text.trim().is_empty() {
+                        entities.push(RecognizedEntity {
+                            text: text.trim().to_string(),
+                            label,
+                            score: avg_score,
+                            start,
+                            end,
+                        });
+                    }
+                }
+                current_entity = Some((
+                    entity_type.to_string(),
+                    tok_start,
+                    tok_end,
+                    vec![*best_prob],
+                ));
+            } else {
+                // O tag — flush any pending entity
+                if let Some((label, start, end, scores)) = current_entity.take() {
+                    let avg_score = scores.iter().sum::<f32>() / scores.len() as f32;
+                    let text = original_text[start..end].to_string();
+                    if !text.trim().is_empty() {
+                        entities.push(RecognizedEntity {
+                            text: text.trim().to_string(),
+                            label,
+                            score: avg_score,
+                            start,
+                            end,
+                        });
+                    }
+                }
+            }
+        }
+
+        // Flush final entity
+        if let Some((label, start, end, scores)) = current_entity {
+            let avg_score = scores.iter().sum::<f32>() / scores.len() as f32;
+            let text = original_text[start..end].to_string();
+            if !text.trim().is_empty() {
+                entities.push(RecognizedEntity {
+                    text: text.trim().to_string(),
+                    label,
+                    score: avg_score,
+                    start,
+                    end,
+                });
+            }
+        }
+
+        entities
+    }
+
+    /// Get the label names in index order.
+    pub fn labels(&self) -> &[String] {
+        &self.labels
+    }
+
+    /// Get the number of classification labels.
+    pub fn num_labels(&self) -> usize {
+        self.num_labels
+    }
+}
+
 /// Multi-label sequence classifier using XLM-RoBERTa.
 ///
 /// Classifies text into multiple labels with independent sigmoid activations.

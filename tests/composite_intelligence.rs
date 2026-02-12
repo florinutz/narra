@@ -780,3 +780,367 @@ async fn test_search_hints_max_three() {
         response.hints.len()
     );
 }
+
+// =============================================================================
+// ENRICHMENT TESTS — narrative tensions and character roles in composites
+// =============================================================================
+
+use common::builders::{CharacterBuilder, EventBuilder, KnowledgeBuilder};
+use narra::models::knowledge::{
+    create_knowledge_state, CertaintyLevel, KnowledgeStateCreate, LearningMethod,
+};
+use narra::models::perception::create_perception;
+use narra::models::relationship::{create_relationship, RelationshipCreate};
+use narra::repository::{
+    EntityRepository, KnowledgeRepository, SurrealEntityRepository, SurrealKnowledgeRepository,
+};
+
+/// Test ScenePlan includes narrative tensions when characters have contradictory knowledge.
+#[tokio::test]
+async fn test_scene_prep_with_narrative_tensions() {
+    let harness = TestHarness::new().await;
+    let entity_repo = SurrealEntityRepository::new(harness.db.clone());
+    let knowledge_repo = SurrealKnowledgeRepository::new(harness.db.clone());
+
+    let alice = entity_repo
+        .create_character(CharacterBuilder::new("Alice").build())
+        .await
+        .unwrap();
+    let bob = entity_repo
+        .create_character(CharacterBuilder::new("Bob").build())
+        .await
+        .unwrap();
+    let alice_key = alice.id.key().to_string();
+    let bob_key = bob.id.key().to_string();
+
+    let event = entity_repo
+        .create_event(EventBuilder::new("Discovery").sequence(1).build())
+        .await
+        .unwrap();
+    let event_key = event.id.key().to_string();
+
+    // Create a knowledge entity (target for knowledge states)
+    let fact = knowledge_repo
+        .create_knowledge(
+            KnowledgeBuilder::new("The butler did it")
+                .for_character(&alice_key)
+                .build(),
+        )
+        .await
+        .unwrap();
+    let fact_id = format!("knowledge:{}", fact.id.key());
+
+    // Alice knows the fact, Bob believes wrongly
+    create_knowledge_state(
+        &harness.db,
+        &alice_key,
+        &fact_id,
+        KnowledgeStateCreate {
+            certainty: CertaintyLevel::Knows,
+            learning_method: LearningMethod::Initial,
+            event: Some(event_key.clone()),
+            truth_value: Some("true".to_string()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    create_knowledge_state(
+        &harness.db,
+        &bob_key,
+        &fact_id,
+        KnowledgeStateCreate {
+            certainty: CertaintyLevel::BelievesWrongly,
+            learning_method: LearningMethod::Initial,
+            event: Some(event_key.clone()),
+            truth_value: Some("false".to_string()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    let service = CompositeIntelligenceService::new(harness.db.clone());
+    let plan = service
+        .scene_prep(&[
+            format!("character:{}", alice_key),
+            format!("character:{}", bob_key),
+        ])
+        .await
+        .expect("Scene prep should succeed");
+
+    // Should detect contradictory knowledge tension
+    assert!(
+        !plan.narrative_tensions.is_empty(),
+        "Should detect narrative tensions from contradictory knowledge"
+    );
+
+    let has_contradiction = plan
+        .narrative_tensions
+        .iter()
+        .any(|t| t.tension_type == "contradictory_knowledge");
+    assert!(
+        has_contradiction,
+        "Should have a contradictory_knowledge tension type, got: {:?}",
+        plan.narrative_tensions
+            .iter()
+            .map(|t| &t.tension_type)
+            .collect::<Vec<_>>()
+    );
+}
+
+/// Test ScenePlan includes character roles when graph has enough structure.
+#[tokio::test]
+async fn test_scene_prep_with_character_roles() {
+    let harness = TestHarness::new().await;
+    let entity_repo = SurrealEntityRepository::new(harness.db.clone());
+
+    // Create a hub character with many connections
+    let hub = entity_repo
+        .create_character(CharacterBuilder::new("Hub").build())
+        .await
+        .unwrap();
+    let hub_key = hub.id.key().to_string();
+
+    let mut spoke_keys = vec![];
+    for i in 0..5 {
+        let spoke = entity_repo
+            .create_character(CharacterBuilder::new(&format!("Spoke{}", i)).build())
+            .await
+            .unwrap();
+        let spoke_key = spoke.id.key().to_string();
+
+        // Both relationship AND perception (social_hub needs perception edges)
+        create_relationship(
+            &harness.db,
+            RelationshipCreate {
+                from_character_id: hub_key.clone(),
+                to_character_id: spoke_key.clone(),
+                rel_type: "ally".to_string(),
+                subtype: None,
+                label: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        create_perception(
+            &harness.db,
+            &hub_key,
+            &spoke_key,
+            PerceptionCreate {
+                rel_types: vec!["ally".to_string()],
+                subtype: None,
+                feelings: None,
+                perception: None,
+                tension_level: None,
+                history_notes: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        spoke_keys.push(spoke_key);
+    }
+
+    let service = CompositeIntelligenceService::new(harness.db.clone());
+    let plan = service
+        .scene_prep(&[
+            format!("character:{}", hub_key),
+            format!("character:{}", spoke_keys[0]),
+            format!("character:{}", spoke_keys[1]),
+        ])
+        .await
+        .expect("Scene prep should succeed");
+
+    // The hub character should be detected as having a role
+    let hub_role = plan
+        .character_roles
+        .iter()
+        .find(|r| r.character_id == format!("character:{}", hub_key));
+    assert!(
+        hub_role.is_some(),
+        "Hub character should have an inferred role, got: {:?}",
+        plan.character_roles
+    );
+
+    if let Some(role) = hub_role {
+        let is_hub_like = role.primary_role == "social_hub"
+            || role.primary_role == "connector"
+            || role.secondary_roles.contains(&"social_hub".to_string())
+            || role.secondary_roles.contains(&"connector".to_string());
+        assert!(
+            is_hub_like,
+            "Hub with 5 connections should be social_hub or connector, got: {} (secondary: {:?})",
+            role.primary_role, role.secondary_roles
+        );
+    }
+}
+
+/// Test CharacterDossier includes narrative tensions for the target character.
+#[tokio::test]
+async fn test_character_dossier_with_narrative_tensions() {
+    let harness = TestHarness::new().await;
+
+    let alice = create_character(
+        &harness.db,
+        CharacterCreate {
+            name: "Alice".into(),
+            roles: vec!["protagonist".to_string()],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let bob = create_character(
+        &harness.db,
+        CharacterCreate {
+            name: "Bob".into(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    let alice_key = alice.id.key().to_string();
+    let bob_key = bob.id.key().to_string();
+
+    // Create conflicting loyalties: Alice is allied with Bob, but also rivals
+    create_relationship(
+        &harness.db,
+        RelationshipCreate {
+            from_character_id: alice_key.clone(),
+            to_character_id: bob_key.clone(),
+            rel_type: "ally".to_string(),
+            subtype: None,
+            label: Some("allied".to_string()),
+        },
+    )
+    .await
+    .unwrap();
+
+    // Add a high-tension perception (creates edge-based tension)
+    create_perception_pair(
+        &harness.db,
+        &alice_key,
+        &bob_key,
+        PerceptionCreate {
+            rel_types: vec!["rival".to_string()],
+            subtype: None,
+            feelings: Some("distrustful".to_string()),
+            perception: None,
+            tension_level: Some(9),
+            history_notes: None,
+        },
+        PerceptionCreate {
+            rel_types: vec!["rival".to_string()],
+            subtype: None,
+            feelings: Some("hostile".to_string()),
+            perception: None,
+            tension_level: Some(8),
+            history_notes: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let service = CompositeIntelligenceService::new(harness.db.clone());
+    let dossier = service
+        .character_dossier(&format!("character:{}", alice_key))
+        .await
+        .expect("Dossier should succeed");
+
+    // Narrative tensions should be filtered to those involving Alice
+    for t in &dossier.narrative_tensions {
+        let alice_full = format!("character:{}", alice_key);
+        assert!(
+            t.character_a_id == alice_full || t.character_b_id == alice_full,
+            "Tension should involve Alice: {:?}",
+            t
+        );
+    }
+
+    // The high-tension perception (>=7) should generate an edge tension
+    let has_edge_tension = dossier
+        .narrative_tensions
+        .iter()
+        .any(|t| t.tension_type == "high_edge_tension");
+    assert!(
+        has_edge_tension,
+        "Should detect high_edge_tension from tension_level=9, got: {:?}",
+        dossier
+            .narrative_tensions
+            .iter()
+            .map(|t| &t.tension_type)
+            .collect::<Vec<_>>()
+    );
+}
+
+/// Test CharacterDossier annotation fields are None when services unavailable (default state in tests).
+#[tokio::test]
+async fn test_character_dossier_annotation_fields_none() {
+    let harness = TestHarness::new().await;
+
+    let alice = create_character(
+        &harness.db,
+        CharacterCreate {
+            name: "Alice".into(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    let service = CompositeIntelligenceService::new(harness.db.clone());
+    let dossier = service
+        .character_dossier(&alice.id.to_string())
+        .await
+        .expect("Dossier should succeed");
+
+    // Annotation fields should be None (populated at handler level, not in service)
+    assert!(
+        dossier.emotion_profile.is_none(),
+        "emotion_profile should be None when populated at handler level"
+    );
+    assert!(
+        dossier.theme_tags.is_none(),
+        "theme_tags should be None when populated at handler level"
+    );
+}
+
+/// Test ScenePlan annotation fields are None by default.
+#[tokio::test]
+async fn test_scene_plan_annotation_fields_none() {
+    let harness = TestHarness::new().await;
+
+    let alice = create_character(
+        &harness.db,
+        CharacterCreate {
+            name: "Alice".into(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let bob = create_character(
+        &harness.db,
+        CharacterCreate {
+            name: "Bob".into(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    let service = CompositeIntelligenceService::new(harness.db.clone());
+    let plan = service
+        .scene_prep(&[alice.id.to_string(), bob.id.to_string()])
+        .await
+        .expect("Scene prep should succeed");
+
+    assert!(
+        plan.scene_themes.is_none(),
+        "scene_themes should be None when populated at handler level"
+    );
+}

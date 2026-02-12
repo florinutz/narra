@@ -2,13 +2,16 @@
 //! into higher-level narrative insights.
 
 use crate::db::connection::NarraDb;
+use crate::models::annotation::{EmotionOutput, ThemeOutput};
 use serde::Serialize;
 use std::sync::Arc;
 
 use crate::models::knowledge::find_knowledge_conflicts;
+use crate::services::role_inference::InferredRole;
+use crate::services::tension::NarrativeTension;
 use crate::services::{
     CentralityMetric, ClusteringService, EntityType, GraphAnalyticsService, InfluenceService,
-    IronyService, KnowledgeAsymmetry,
+    IronyService, KnowledgeAsymmetry, RoleInferenceService, TensionService,
 };
 use crate::NarraError;
 
@@ -48,6 +51,7 @@ pub struct SituationReport {
     pub irony_highlights: Vec<KnowledgeAsymmetry>,
     pub knowledge_conflicts: Vec<ConflictSummary>,
     pub high_tension_pairs: Vec<TensionPair>,
+    pub narrative_tensions: Vec<NarrativeTension>,
     pub theme_count: usize,
     pub suggestions: Vec<String>,
     pub narrative_momentum: NarrativeMomentum,
@@ -96,6 +100,7 @@ pub struct PerceptionSummary {
 pub struct CharacterDossier {
     pub name: String,
     pub roles: Vec<String>,
+    pub inferred_roles: Option<InferredRole>,
     pub centrality_rank: Option<usize>,
     pub influence_reach: usize,
     pub knowledge_advantages: usize,
@@ -107,6 +112,14 @@ pub struct CharacterDossier {
     pub arc_trajectory: Option<ArcTrajectoryBrief>,
     pub relationship_map: Vec<RelationshipBrief>,
     pub knowledge_inventory: KnowledgeInventory,
+    /// Structural narrative tensions involving this character.
+    pub narrative_tensions: Vec<NarrativeTension>,
+    /// Emotion profile from ML classification (populated at handler level).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub emotion_profile: Option<EmotionOutput>,
+    /// Theme tags from ML classification (populated at handler level).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub theme_tags: Option<ThemeOutput>,
 }
 
 /// Brief arc trajectory summary.
@@ -160,6 +173,13 @@ pub struct ScenePlan {
     pub opportunities: Vec<String>,
     pub knowledge_reveals: Vec<KnowledgeReveal>,
     pub fact_constraints: Vec<FactConstraint>,
+    /// Structural narrative tensions among the scene characters.
+    pub narrative_tensions: Vec<NarrativeTension>,
+    /// Inferred narrative roles for each scene character.
+    pub character_roles: Vec<InferredRole>,
+    /// Combined theme analysis for the scene (populated at handler level).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scene_themes: Option<ThemeOutput>,
 }
 
 /// A knowledge reveal opportunity in a scene.
@@ -304,12 +324,14 @@ impl CompositeIntelligenceService {
     pub async fn situation_report(&self) -> Result<SituationReport, NarraError> {
         let irony_service = IronyService::new(self.db.clone());
         let clustering_service = ClusteringService::new(self.db.clone());
+        let tension_service = TensionService::new(self.db.clone());
 
-        // Run all 7 async queries in parallel
+        // Run all 8 async queries in parallel
         let (
             irony_result,
             conflicts_result,
             tension_result,
+            narrative_tension_result,
             theme_result,
             narrative_momentum,
             unresolved_threads,
@@ -318,6 +340,7 @@ impl CompositeIntelligenceService {
             irony_service.generate_report(None, 3),
             find_knowledge_conflicts(&self.db),
             self.query_tension_pairs(7, 10),
+            tension_service.detect_tensions(10, 0.3),
             clustering_service.discover_themes(
                 vec![EntityType::Character, EntityType::Event, EntityType::Scene],
                 Some(5),
@@ -356,6 +379,9 @@ impl CompositeIntelligenceService {
         }
 
         let high_tension_pairs = tension_result?;
+        let narrative_tensions = narrative_tension_result
+            .map(|r| r.tensions)
+            .unwrap_or_default();
         let theme_count = theme_result.map(|r| r.clusters.len()).unwrap_or(0);
 
         // Suggestions depend on irony, conflicts, tensions
@@ -363,12 +389,14 @@ impl CompositeIntelligenceService {
             &irony_highlights,
             &knowledge_conflicts,
             &high_tension_pairs,
+            &narrative_tensions,
         );
 
         Ok(SituationReport {
             irony_highlights,
             knowledge_conflicts,
             high_tension_pairs,
+            narrative_tensions,
             theme_count,
             suggestions,
             narrative_momentum,
@@ -387,8 +415,10 @@ impl CompositeIntelligenceService {
         let analytics = GraphAnalyticsService::new(self.db.clone());
         let influence_service = InfluenceService::new(self.db.clone());
         let irony_service = IronyService::new(self.db.clone());
+        let role_service = RoleInferenceService::new(self.db.clone());
+        let tension_service = TensionService::new(self.db.clone());
 
-        // Run all 9 async queries in parallel
+        // Run all 11 async queries in parallel
         let (
             char_info_result,
             centrality_result,
@@ -399,6 +429,8 @@ impl CompositeIntelligenceService {
             arc_trajectory,
             relationship_map,
             knowledge_inventory,
+            role_result,
+            tension_result,
         ) = tokio::join!(
             self.fetch_character_info(&full_id),
             analytics.compute_centrality(None, vec![CentralityMetric::Degree], 100),
@@ -409,6 +441,8 @@ impl CompositeIntelligenceService {
             self.compute_arc_trajectory(&full_id),
             self.build_relationship_map(&full_id),
             self.build_knowledge_inventory(&full_id),
+            role_service.infer_roles(100),
+            tension_service.detect_tensions(20, 0.0),
         );
 
         // Extract results — char_info is the only hard error
@@ -447,6 +481,20 @@ impl CompositeIntelligenceService {
         let false_beliefs = false_beliefs_result?;
         let (avg_tension, key_perceptions) = perceptions_result?;
 
+        // Extract inferred role for this character (best-effort)
+        let inferred_roles = role_result
+            .ok()
+            .and_then(|report| report.roles.into_iter().find(|r| r.character_id == full_id));
+
+        // Filter narrative tensions to those involving this character
+        let narrative_tensions: Vec<NarrativeTension> = tension_result
+            .ok()
+            .map(|r| r.tensions)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|t| t.character_a_id == full_id || t.character_b_id == full_id)
+            .collect();
+
         // Suggestions depend on the above results
         let suggestions = generate_dossier_suggestions(
             &name,
@@ -461,6 +509,7 @@ impl CompositeIntelligenceService {
         Ok(CharacterDossier {
             name,
             roles,
+            inferred_roles,
             centrality_rank,
             influence_reach,
             knowledge_advantages,
@@ -472,6 +521,9 @@ impl CompositeIntelligenceService {
             arc_trajectory,
             relationship_map,
             knowledge_inventory,
+            narrative_tensions,
+            emotion_profile: None,
+            theme_tags: None,
         })
     }
 
@@ -503,13 +555,42 @@ impl CompositeIntelligenceService {
             }
         }
 
-        // Run all pair queries + fact queries in parallel
-        let (pair_results, applicable_facts, fact_constraints) = tokio::join!(
+        // Run all pair queries + fact + tension + role queries in parallel
+        let tension_service = TensionService::new(self.db.clone());
+        let role_service = RoleInferenceService::new(self.db.clone());
+        let char_count = normalized.len();
+
+        let (pair_results, applicable_facts, fact_constraints, tension_result, role_result) = tokio::join!(
             futures::future::join_all(pair_futures),
             self.fetch_applicable_facts(&normalized),
             self.fetch_fact_constraints(&normalized),
+            tension_service.detect_tensions(20, 0.0),
+            role_service.infer_roles(char_count + 10),
         );
         let applicable_facts = applicable_facts?;
+
+        // Filter tensions to only those involving scene characters
+        let scene_chars: std::collections::HashSet<&str> =
+            normalized.iter().map(|s| s.as_str()).collect();
+        let narrative_tensions: Vec<NarrativeTension> = tension_result
+            .ok()
+            .map(|r| r.tensions)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|t| {
+                scene_chars.contains(t.character_a_id.as_str())
+                    || scene_chars.contains(t.character_b_id.as_str())
+            })
+            .collect();
+
+        // Filter roles to only scene characters
+        let character_roles: Vec<InferredRole> = role_result
+            .ok()
+            .map(|r| r.roles)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|r| scene_chars.contains(r.character_id.as_str()))
+            .collect();
 
         // Aggregate pair results
         let mut pair_dynamics = Vec::new();
@@ -563,6 +644,9 @@ impl CompositeIntelligenceService {
             opportunities,
             knowledge_reveals,
             fact_constraints,
+            narrative_tensions,
+            character_roles,
+            scene_themes: None,
         })
     }
 
@@ -628,7 +712,7 @@ impl CompositeIntelligenceService {
             .db
             .query(
                 "SELECT count() AS count FROM knows \
-                 WHERE in = $char_id AND certainty = 'BelievesWrongly' \
+                 WHERE in = $char_id AND certainty = 'believes_wrongly' \
                  GROUP ALL",
             )
             .bind((
@@ -785,7 +869,7 @@ impl CompositeIntelligenceService {
     async fn find_unresolved_threads(&self) -> Vec<UnresolvedThread> {
         let secrets_query = "SELECT out AS target, in AS character_id, out AS fact \
             FROM knows \
-            WHERE certainty = 'Knows' \
+            WHERE certainty = 'knows' \
             GROUP BY out \
             HAVING count() = 1 \
             LIMIT 5";
@@ -800,7 +884,7 @@ impl CompositeIntelligenceService {
         let false_beliefs_query =
             "SELECT type::string(in) AS character_id, type::string(out) AS target \
             FROM knows \
-            WHERE certainty = 'BelievesWrongly' \
+            WHERE certainty = 'believes_wrongly' \
             LIMIT 5";
 
         let stale_arcs_query = "SELECT id AS character_id, name AS character_name \
@@ -1091,10 +1175,10 @@ impl CompositeIntelligenceService {
 
         for row in rows {
             match row.certainty.as_str() {
-                "Knows" => inventory.knows = row.count,
-                "Suspects" => inventory.suspects = row.count,
-                "BelievesWrongly" => inventory.believes_wrongly = row.count,
-                "Uncertain" => inventory.uncertain = row.count,
+                "knows" => inventory.knows = row.count,
+                "suspects" => inventory.suspects = row.count,
+                "believes_wrongly" => inventory.believes_wrongly = row.count,
+                "uncertain" => inventory.uncertain = row.count,
                 _ => inventory.other += row.count,
             }
         }
@@ -1225,6 +1309,7 @@ fn generate_situation_suggestions(
     irony: &[KnowledgeAsymmetry],
     conflicts: &[ConflictSummary],
     tensions: &[TensionPair],
+    narrative_tensions: &[NarrativeTension],
 ) -> Vec<String> {
     let mut suggestions = Vec::new();
 
@@ -1251,7 +1336,21 @@ fn generate_situation_suggestions(
         ));
     }
 
-    if irony.is_empty() && conflicts.is_empty() && tensions.is_empty() {
+    // Add suggestions from narrative tension analysis
+    if let Some(top) = narrative_tensions.first() {
+        if top.severity >= 0.5 {
+            suggestions.push(format!(
+                "Structural {} between {} and {} — {}",
+                top.tension_type, top.character_a_name, top.character_b_name, top.description
+            ));
+        }
+    }
+
+    if irony.is_empty()
+        && conflicts.is_empty()
+        && tensions.is_empty()
+        && narrative_tensions.is_empty()
+    {
         suggestions.push("The narrative is relatively stable — consider introducing new secrets, misunderstandings, or conflicting goals".to_string());
     }
 
@@ -1406,7 +1505,7 @@ mod tests {
 
     #[test]
     fn test_situation_suggestions_empty_world() {
-        let suggestions = generate_situation_suggestions(&[], &[], &[]);
+        let suggestions = generate_situation_suggestions(&[], &[], &[], &[]);
         assert_eq!(suggestions.len(), 1);
         assert!(suggestions[0].contains("stable"));
     }
@@ -1419,8 +1518,8 @@ mod tests {
             unknowing_character_id: "character:bob".to_string(),
             unknowing_character_name: "Bob".to_string(),
             fact: "the secret".to_string(),
-            learning_method: "Witnessed".to_string(),
-            certainty: "Knows".to_string(),
+            learning_method: "witnessed".to_string(),
+            certainty: "knows".to_string(),
             scenes_since: 3,
             signal_strength: "high".to_string(),
             about: "the betrayal".to_string(),
@@ -1429,7 +1528,7 @@ mod tests {
             feelings: Some("suspicious".to_string()),
             history_notes: None,
         }];
-        let suggestions = generate_situation_suggestions(&irony, &[], &[]);
+        let suggestions = generate_situation_suggestions(&irony, &[], &[], &[]);
         assert!(suggestions[0].contains("Alice"));
         assert!(suggestions[0].contains("Bob"));
         assert!(suggestions[0].contains("reveal"));
@@ -1440,10 +1539,10 @@ mod tests {
         let conflicts = vec![ConflictSummary {
             target: "knowledge:secret".to_string(),
             character_id: "character:bob".to_string(),
-            certainty: "BelievesWrongly".to_string(),
+            certainty: "believes_wrongly".to_string(),
             truth_value: "false".to_string(),
         }];
-        let suggestions = generate_situation_suggestions(&[], &conflicts, &[]);
+        let suggestions = generate_situation_suggestions(&[], &conflicts, &[], &[]);
         assert!(suggestions[0].contains("false beliefs"));
     }
 

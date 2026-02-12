@@ -392,3 +392,90 @@ async fn mark_perspective_stale_for_pair(
         }
     }
 }
+
+impl NarraServer {
+    pub(crate) async fn handle_annotate_entities(
+        &self,
+        entity_types: Option<Vec<String>>,
+        run_emotions: bool,
+        run_themes: bool,
+        run_ner: bool,
+        concurrency: Option<usize>,
+    ) -> Result<MutationResponse, String> {
+        use crate::services::{AnnotationPipeline, PipelineConfig};
+
+        let types = entity_types.unwrap_or_else(|| {
+            vec![
+                "character".to_string(),
+                "event".to_string(),
+                "scene".to_string(),
+            ]
+        });
+        let type_refs: Vec<&str> = types.iter().map(|s| s.as_str()).collect();
+
+        let config = PipelineConfig {
+            run_emotions,
+            run_themes,
+            run_ner,
+            concurrency: concurrency.unwrap_or(4),
+        };
+
+        let pipeline = AnnotationPipeline::new(
+            self.db.clone(),
+            self.emotion_service.clone(),
+            self.theme_service.clone(),
+            self.ner_service.clone(),
+        );
+
+        let progress = crate::services::noop_progress();
+
+        let report = pipeline
+            .annotate_all(&type_refs, config, progress)
+            .await
+            .map_err(|e| format!("Annotation pipeline failed: {}", e))?;
+
+        let mut content_parts = vec![format!(
+            "# Annotation Pipeline Report\n\nProcessed **{}** entities across types: {}",
+            report.total_processed,
+            types.join(", ")
+        )];
+
+        if report.total_processed > 0 {
+            content_parts.push(format!(
+                "\n| Classifier | Successes |\n|---|---|\n| Emotion | {} |\n| Theme | {} |\n| NER | {} |",
+                report.emotion_successes, report.theme_successes, report.ner_successes
+            ));
+
+            if report.errors > 0 {
+                content_parts.push(format!(
+                    "\n**Errors:** {} entities had classifier errors",
+                    report.errors
+                ));
+            }
+        } else {
+            content_parts.push("\nNo entities found to annotate.".to_string());
+        }
+
+        let content = content_parts.join("\n");
+
+        Ok(MutationResponse {
+            entity: EntityResult {
+                id: "report:annotation_pipeline".to_string(),
+                entity_type: "report".to_string(),
+                name: "Annotation Pipeline".to_string(),
+                content,
+                confidence: None,
+                last_modified: None,
+            },
+            entities: None,
+            impact: None,
+            hints: vec![format!(
+                "Processed {} entities ({} emotion, {} theme, {} NER successes)",
+                report.total_processed,
+                report.emotion_successes,
+                report.theme_successes,
+                report.ner_successes
+            )],
+        })
+    }
+}
