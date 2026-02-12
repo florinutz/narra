@@ -8,7 +8,8 @@ TEST_DATA  := /tmp/narra-test-data
 
 .PHONY: help build release check test test-unit test-integration test-snapshot \
         clippy fmt fmt-check lint clean doc install size \
-        quick-check test-embedding test-full machete pre-release install-hooks
+        quick-check test-embedding test-full machete pre-release install-hooks \
+        check-ci
 
 ## —— General ——————————————————————————————————————————
 
@@ -62,7 +63,12 @@ test-full: test test-embedding ## Full test suite including embedding tests
 machete: ## Check for unused dependencies
 	cargo machete
 
-pre-release: fmt clippy test-full machete release ## Full validation before tagging a release
+check-ci: ## Simulate CI locally (no Metal, catches cfg-gated dead code)
+	cargo fmt -- --check
+	cargo clippy --no-default-features --tests -- -D warnings
+	cargo test --no-default-features
+
+pre-release: fmt clippy test-full machete check-ci release ## Full validation before tagging a release
 
 ## —— Docs —————————————————————————————————————————————
 

@@ -9,7 +9,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use candle_core::{DType, Device, Tensor};
-use candle_nn::{LayerNorm, Module, VarBuilder};
+use candle_nn::VarBuilder;
+#[cfg(any(target_os = "macos", feature = "cuda"))]
+use candle_nn::{LayerNorm, Module};
 use candle_transformers::models::bert::{BertModel, Config as BertConfig};
 use candle_transformers::models::xlm_roberta::{
     Config as XLMRobertaConfig, XLMRobertaForSequenceClassification,
@@ -79,6 +81,7 @@ pub fn select_device() -> Device {
 }
 
 /// Probe whether a device supports layer-norm (required by BERT/RoBERTa).
+#[cfg(any(target_os = "macos", feature = "cuda"))]
 fn probe_layer_norm(device: &Device) -> bool {
     (|| -> candle_core::Result<()> {
         let weight = Tensor::ones(4, DType::F32, device)?;
