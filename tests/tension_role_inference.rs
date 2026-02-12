@@ -47,7 +47,7 @@ async fn add_knowledge_state(
     event_key: &str,
 ) {
     let mut state = KnowledgeStateCreate {
-        certainty: certainty.clone(),
+        certainty,
         learning_method: LearningMethod::Initial,
         event: Some(event_key.to_string()),
         ..Default::default()
@@ -520,7 +520,7 @@ async fn test_role_inference_deceived_character() {
     for i in 0..3 {
         let fact = knowledge_repo
             .create_knowledge(
-                KnowledgeBuilder::new(&format!("False fact {}", i))
+                KnowledgeBuilder::new(format!("False fact {}", i))
                     .for_character(&narrator_key)
                     .build(),
             )

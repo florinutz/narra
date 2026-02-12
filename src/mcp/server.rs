@@ -154,6 +154,20 @@ impl NarraServer {
         }
     }
 
+    /// Replace annotation services (emotion, theme, NER) for testing.
+    /// Follows the established `::with_provider()` pattern used by other services.
+    pub fn with_annotation_services(
+        mut self,
+        emotion: Arc<dyn EmotionService + Send + Sync>,
+        theme: Arc<dyn ThemeService + Send + Sync>,
+        ner: Arc<dyn NerService + Send + Sync>,
+    ) -> Self {
+        self.emotion_service = emotion;
+        self.theme_service = theme;
+        self.ner_service = ner;
+        self
+    }
+
     // ==========================================================================
     // MCP TOOLS (18 total) - All #[tool] methods must be in this impl block
     // 5 parameterized + 13 dedicated. Implementation details in tools/*.rs files

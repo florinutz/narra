@@ -202,6 +202,48 @@ impl EmotionService for LocalEmotionService {
 }
 
 // ============================================================================
+// No-op service (for tests / graceful degradation)
+// ============================================================================
+
+/// No-op emotion service for testing.
+pub struct NoopEmotionService;
+
+impl Default for NoopEmotionService {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl NoopEmotionService {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+#[async_trait]
+impl EmotionService for NoopEmotionService {
+    async fn get_emotions(
+        &self,
+        _entity_id: &str,
+        _text: &str,
+    ) -> Result<EmotionOutput, NarraError> {
+        Err(NarraError::Database(
+            "Emotion service is not available (noop)".to_string(),
+        ))
+    }
+
+    async fn classify_text(&self, _text: &str) -> Result<EmotionOutput, NarraError> {
+        Err(NarraError::Database(
+            "Emotion service is not available (noop)".to_string(),
+        ))
+    }
+
+    fn is_available(&self) -> bool {
+        false
+    }
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 
@@ -298,7 +340,7 @@ mod tests {
 
     #[test]
     fn test_noop_emotion_service_default() {
-        let service = NoopEmotionService::default();
+        let service = NoopEmotionService;
         assert!(!service.is_available());
     }
 
@@ -386,43 +428,5 @@ mod tests {
         assert_eq!(roundtrip.dominant, "joy");
         assert_eq!(roundtrip.scores.len(), 2);
         assert_eq!(roundtrip.active_count, 2);
-    }
-}
-
-/// No-op emotion service for testing.
-pub struct NoopEmotionService;
-
-impl Default for NoopEmotionService {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl NoopEmotionService {
-    pub fn new() -> Self {
-        Self
-    }
-}
-
-#[async_trait]
-impl EmotionService for NoopEmotionService {
-    async fn get_emotions(
-        &self,
-        _entity_id: &str,
-        _text: &str,
-    ) -> Result<EmotionOutput, NarraError> {
-        Err(NarraError::Database(
-            "Emotion service is not available (noop)".to_string(),
-        ))
-    }
-
-    async fn classify_text(&self, _text: &str) -> Result<EmotionOutput, NarraError> {
-        Err(NarraError::Database(
-            "Emotion service is not available (noop)".to_string(),
-        ))
-    }
-
-    fn is_available(&self) -> bool {
-        false
     }
 }

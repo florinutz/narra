@@ -1,15 +1,20 @@
-//! Integration tests for annotation CRUD, staleness propagation, emotion, and theme queries.
+//! Integration tests for annotation CRUD, staleness propagation, emotion, theme, and NER queries.
 
 mod common;
 
+use std::sync::Arc;
+
+use async_trait::async_trait;
 use common::harness::TestHarness;
 use common::{to_mutation_input, to_query_input};
 use narra::mcp::{MutationRequest, NarraServer, QueryRequest};
 use narra::models::annotation::{
     delete_entity_annotations, get_annotation, get_entity_annotations, get_stale_annotations,
-    mark_annotations_stale, upsert_annotation, AnnotationCreate, NerEntity, NerOutput, ThemeOutput,
-    ThemeScore,
+    mark_annotations_stale, upsert_annotation, AnnotationCreate, EmotionOutput, EmotionScore,
+    NerEntity, NerOutput, ThemeOutput, ThemeScore,
 };
+use narra::services::{EmotionService, NerService, ThemeService};
+use narra::NarraError;
 use rmcp::handler::server::wrapper::Parameters;
 
 /// Helper to create a character and return its ID.
@@ -1097,8 +1102,8 @@ async fn test_entity_update_marks_all_three_annotation_types_stale() {
     for model_type in &["emotion", "theme", "ner"] {
         let ann = get_annotation(&harness.db, &char_id, model_type)
             .await
-            .expect(&format!("get {}", model_type))
-            .expect(&format!("{} exists", model_type));
+            .unwrap_or_else(|_| panic!("get {}", model_type))
+            .unwrap_or_else(|| panic!("{} exists", model_type));
         assert!(
             ann.stale,
             "{} annotation should be stale after entity update",
@@ -1515,7 +1520,7 @@ async fn test_infer_roles_via_mcp_with_social_hub() {
     for i in 0..5 {
         let spoke = repo
             .create_character(
-                common::builders::CharacterBuilder::new(&format!("Spoke{}", i)).build(),
+                common::builders::CharacterBuilder::new(format!("Spoke{}", i)).build(),
             )
             .await
             .unwrap();
@@ -1709,5 +1714,293 @@ async fn test_annotate_entities_via_mcp_custom_types() {
         result.is_ok(),
         "Annotate with custom types should succeed: {:?}",
         result.err()
+    );
+}
+
+// =============================================================================
+// Happy-path MCP tests: emotion/theme/NER queries with mock services
+// =============================================================================
+
+/// Mock emotion service that returns canned results.
+struct MockEmotionService;
+
+#[async_trait]
+impl EmotionService for MockEmotionService {
+    async fn get_emotions(
+        &self,
+        _entity_id: &str,
+        _text: &str,
+    ) -> Result<EmotionOutput, NarraError> {
+        Ok(EmotionOutput {
+            scores: vec![
+                EmotionScore {
+                    label: "joy".to_string(),
+                    score: 0.85,
+                },
+                EmotionScore {
+                    label: "love".to_string(),
+                    score: 0.42,
+                },
+                EmotionScore {
+                    label: "sadness".to_string(),
+                    score: 0.05,
+                },
+            ],
+            dominant: "joy".to_string(),
+            active_count: 2,
+        })
+    }
+
+    async fn classify_text(&self, _text: &str) -> Result<EmotionOutput, NarraError> {
+        self.get_emotions("", "").await
+    }
+
+    fn is_available(&self) -> bool {
+        true
+    }
+}
+
+/// Mock theme service that returns canned results.
+struct MockThemeService;
+
+#[async_trait]
+impl ThemeService for MockThemeService {
+    async fn get_themes(
+        &self,
+        _entity_id: &str,
+        _text: &str,
+        _themes: Option<&[String]>,
+    ) -> Result<ThemeOutput, NarraError> {
+        Ok(ThemeOutput {
+            themes: vec![
+                ThemeScore {
+                    label: "betrayal".to_string(),
+                    score: 0.91,
+                },
+                ThemeScore {
+                    label: "identity".to_string(),
+                    score: 0.67,
+                },
+                ThemeScore {
+                    label: "power".to_string(),
+                    score: 0.33,
+                },
+            ],
+            dominant: "betrayal".to_string(),
+            active_count: 2,
+        })
+    }
+
+    async fn classify_themes(
+        &self,
+        _text: &str,
+        _themes: Option<&[String]>,
+    ) -> Result<ThemeOutput, NarraError> {
+        self.get_themes("", "", None).await
+    }
+
+    fn is_available(&self) -> bool {
+        true
+    }
+}
+
+/// Mock NER service that returns canned results.
+struct MockNerService;
+
+#[async_trait]
+impl NerService for MockNerService {
+    async fn get_entities(&self, _entity_id: &str, _text: &str) -> Result<NerOutput, NarraError> {
+        Ok(NerOutput {
+            entities: vec![
+                NerEntity {
+                    text: "Elena".to_string(),
+                    label: "PER".to_string(),
+                    score: 0.98,
+                    start: 0,
+                    end: 5,
+                },
+                NerEntity {
+                    text: "Blackwood Manor".to_string(),
+                    label: "LOC".to_string(),
+                    score: 0.91,
+                    start: 20,
+                    end: 35,
+                },
+            ],
+            entity_count: 2,
+        })
+    }
+
+    async fn extract_entities(&self, _text: &str) -> Result<NerOutput, NarraError> {
+        self.get_entities("", "").await
+    }
+
+    fn is_available(&self) -> bool {
+        true
+    }
+}
+
+/// Create a test server with mock annotation services that report as available.
+async fn create_mock_annotation_server(harness: &TestHarness) -> NarraServer {
+    let base = common::create_test_server(harness).await;
+    base.with_annotation_services(
+        Arc::new(MockEmotionService),
+        Arc::new(MockThemeService),
+        Arc::new(MockNerService),
+    )
+}
+
+#[tokio::test]
+async fn test_emotions_happy_path_via_mcp() {
+    let harness = TestHarness::new().await;
+    let server = create_mock_annotation_server(&harness).await;
+
+    // Create a character with text content
+    let char_id = create_test_character(&server, "Elena").await;
+
+    // Backfill composite_text so the handler can find text for the entity
+    harness
+        .db
+        .query(format!(
+            "UPDATE {} SET composite_text = 'Elena felt a surge of joy as she entered the sunlit garden.'",
+            char_id
+        ))
+        .await
+        .expect("set composite_text");
+
+    let request = QueryRequest::Emotions {
+        entity_id: char_id.clone(),
+    };
+    let result = server
+        .handle_query(Parameters(to_query_input(request)))
+        .await;
+
+    assert!(
+        result.is_ok(),
+        "Emotions query should succeed: {:?}",
+        result.err()
+    );
+    let response = result.unwrap();
+
+    assert_eq!(response.total, 1);
+    let content = &response.results[0].content;
+    assert!(
+        content.contains("joy"),
+        "Should contain dominant emotion: {}",
+        content
+    );
+    assert!(
+        content.contains("0.85") || content.contains("0.850"),
+        "Should contain joy score: {}",
+        content
+    );
+    assert!(
+        content.contains(&char_id),
+        "Should reference entity ID: {}",
+        content
+    );
+}
+
+#[tokio::test]
+async fn test_themes_happy_path_via_mcp() {
+    let harness = TestHarness::new().await;
+    let server = create_mock_annotation_server(&harness).await;
+
+    let char_id = create_test_character(&server, "Matei").await;
+
+    harness
+        .db
+        .query(format!(
+            "UPDATE {} SET composite_text = 'Matei struggled with his sense of identity after the betrayal.'",
+            char_id
+        ))
+        .await
+        .expect("set composite_text");
+
+    let request = QueryRequest::Themes {
+        entity_id: char_id.clone(),
+        themes: None,
+    };
+    let result = server
+        .handle_query(Parameters(to_query_input(request)))
+        .await;
+
+    assert!(
+        result.is_ok(),
+        "Themes query should succeed: {:?}",
+        result.err()
+    );
+    let response = result.unwrap();
+
+    assert_eq!(response.total, 1);
+    let content = &response.results[0].content;
+    assert!(
+        content.contains("betrayal"),
+        "Should contain dominant theme: {}",
+        content
+    );
+    assert!(
+        content.contains("0.91") || content.contains("0.910"),
+        "Should contain betrayal score: {}",
+        content
+    );
+    assert!(
+        content.contains(&char_id),
+        "Should reference entity ID: {}",
+        content
+    );
+}
+
+#[tokio::test]
+async fn test_extract_entities_happy_path_via_mcp() {
+    let harness = TestHarness::new().await;
+    let server = create_mock_annotation_server(&harness).await;
+
+    let char_id = create_test_character(&server, "Narrator").await;
+
+    harness
+        .db
+        .query(format!(
+            "UPDATE {} SET composite_text = 'Elena walked into Blackwood Manor, seeking answers.'",
+            char_id
+        ))
+        .await
+        .expect("set composite_text");
+
+    let request = QueryRequest::ExtractEntities {
+        entity_id: char_id.clone(),
+    };
+    let result = server
+        .handle_query(Parameters(to_query_input(request)))
+        .await;
+
+    assert!(
+        result.is_ok(),
+        "NER query should succeed: {:?}",
+        result.err()
+    );
+    let response = result.unwrap();
+
+    assert_eq!(response.total, 1);
+    let content = &response.results[0].content;
+    assert!(
+        content.contains("Elena"),
+        "Should contain PER entity: {}",
+        content
+    );
+    assert!(
+        content.contains("Blackwood Manor"),
+        "Should contain LOC entity: {}",
+        content
+    );
+    assert!(
+        content.contains("Persons") || content.contains("PER"),
+        "Should categorize entities: {}",
+        content
+    );
+    assert!(
+        content.contains(&char_id),
+        "Should reference entity ID: {}",
+        content
     );
 }

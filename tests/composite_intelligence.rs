@@ -906,7 +906,7 @@ async fn test_scene_prep_with_character_roles() {
     let mut spoke_keys = vec![];
     for i in 0..5 {
         let spoke = entity_repo
-            .create_character(CharacterBuilder::new(&format!("Spoke{}", i)).build())
+            .create_character(CharacterBuilder::new(format!("Spoke{}", i)).build())
             .await
             .unwrap();
         let spoke_key = spoke.id.key().to_string();

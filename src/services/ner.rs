@@ -172,6 +172,44 @@ impl NerService for LocalNerService {
 }
 
 // ============================================================================
+// No-op service (for tests / graceful degradation)
+// ============================================================================
+
+/// No-op NER service for testing.
+pub struct NoopNerService;
+
+impl Default for NoopNerService {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl NoopNerService {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+#[async_trait]
+impl NerService for NoopNerService {
+    async fn get_entities(&self, _entity_id: &str, _text: &str) -> Result<NerOutput, NarraError> {
+        Err(NarraError::Database(
+            "NER service is not available (noop)".to_string(),
+        ))
+    }
+
+    async fn extract_entities(&self, _text: &str) -> Result<NerOutput, NarraError> {
+        Err(NarraError::Database(
+            "NER service is not available (noop)".to_string(),
+        ))
+    }
+
+    fn is_available(&self) -> bool {
+        false
+    }
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 
@@ -201,7 +239,7 @@ mod tests {
 
     #[test]
     fn test_noop_ner_service_default() {
-        let service = NoopNerService::default();
+        let service = NoopNerService;
         assert!(!service.is_available());
     }
 
@@ -324,39 +362,5 @@ mod tests {
         assert!((entity.score - 0.92).abs() < 0.001);
         assert_eq!(entity.start, 10);
         assert_eq!(entity.end, 18);
-    }
-}
-
-/// No-op NER service for testing.
-pub struct NoopNerService;
-
-impl Default for NoopNerService {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl NoopNerService {
-    pub fn new() -> Self {
-        Self
-    }
-}
-
-#[async_trait]
-impl NerService for NoopNerService {
-    async fn get_entities(&self, _entity_id: &str, _text: &str) -> Result<NerOutput, NarraError> {
-        Err(NarraError::Database(
-            "NER service is not available (noop)".to_string(),
-        ))
-    }
-
-    async fn extract_entities(&self, _text: &str) -> Result<NerOutput, NarraError> {
-        Err(NarraError::Database(
-            "NER service is not available (noop)".to_string(),
-        ))
-    }
-
-    fn is_available(&self) -> bool {
-        false
     }
 }

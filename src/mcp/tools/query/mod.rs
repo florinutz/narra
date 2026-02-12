@@ -143,70 +143,6 @@ pub(crate) fn parse_entity_types(types: Option<Vec<String>>) -> Vec<EntityType> 
         .unwrap_or_default()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::mcp::SearchMetadataFilter;
-
-    #[test]
-    fn test_parse_empty_filter() {
-        let filter = SearchMetadataFilter::default();
-        let result = parse_metadata_filter(&filter);
-        assert!(result.is_empty());
-    }
-
-    #[test]
-    fn test_parse_roles_filter() {
-        let filter = SearchMetadataFilter {
-            roles: Some("warrior".to_string()),
-            ..Default::default()
-        };
-        let result = parse_metadata_filter(&filter);
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].field, "roles");
-        assert!(matches!(result[0].op, FilterOp::Contains));
-    }
-
-    #[test]
-    fn test_parse_sequence_range_filter() {
-        let filter = SearchMetadataFilter {
-            sequence_min: Some(10),
-            sequence_max: Some(50),
-            ..Default::default()
-        };
-        let result = parse_metadata_filter(&filter);
-        assert_eq!(result.len(), 2);
-        assert!(matches!(result[0].op, FilterOp::Gte));
-        assert!(matches!(result[1].op, FilterOp::Lte));
-    }
-
-    #[test]
-    fn test_parse_all_filters() {
-        let filter = SearchMetadataFilter {
-            roles: Some("warrior".to_string()),
-            name: Some("Alice".to_string()),
-            sequence_min: Some(1),
-            sequence_max: Some(100),
-            loc_type: Some("castle".to_string()),
-        };
-        let result = parse_metadata_filter(&filter);
-        assert_eq!(result.len(), 5);
-    }
-
-    #[test]
-    fn test_cursor_roundtrip() {
-        let cursor = create_cursor(42);
-        let parsed = parse_cursor(&cursor).expect("Should parse");
-        assert_eq!(parsed.offset, 42);
-    }
-
-    #[test]
-    fn test_invalid_cursor() {
-        let result = parse_cursor("not-valid-base64!!!");
-        assert!(result.is_err());
-    }
-}
-
 impl NarraServer {
     /// Handler for query tool - implementation called from server.rs
     pub async fn handle_query(
@@ -838,5 +774,69 @@ impl NarraServer {
         );
 
         self.truncate_hints(hints)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mcp::SearchMetadataFilter;
+
+    #[test]
+    fn test_parse_empty_filter() {
+        let filter = SearchMetadataFilter::default();
+        let result = parse_metadata_filter(&filter);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_parse_roles_filter() {
+        let filter = SearchMetadataFilter {
+            roles: Some("warrior".to_string()),
+            ..Default::default()
+        };
+        let result = parse_metadata_filter(&filter);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].field, "roles");
+        assert!(matches!(result[0].op, FilterOp::Contains));
+    }
+
+    #[test]
+    fn test_parse_sequence_range_filter() {
+        let filter = SearchMetadataFilter {
+            sequence_min: Some(10),
+            sequence_max: Some(50),
+            ..Default::default()
+        };
+        let result = parse_metadata_filter(&filter);
+        assert_eq!(result.len(), 2);
+        assert!(matches!(result[0].op, FilterOp::Gte));
+        assert!(matches!(result[1].op, FilterOp::Lte));
+    }
+
+    #[test]
+    fn test_parse_all_filters() {
+        let filter = SearchMetadataFilter {
+            roles: Some("warrior".to_string()),
+            name: Some("Alice".to_string()),
+            sequence_min: Some(1),
+            sequence_max: Some(100),
+            loc_type: Some("castle".to_string()),
+        };
+        let result = parse_metadata_filter(&filter);
+        assert_eq!(result.len(), 5);
+    }
+
+    #[test]
+    fn test_cursor_roundtrip() {
+        let cursor = create_cursor(42);
+        let parsed = parse_cursor(&cursor).expect("Should parse");
+        assert_eq!(parsed.offset, 42);
+    }
+
+    #[test]
+    fn test_invalid_cursor() {
+        let result = parse_cursor("not-valid-base64!!!");
+        assert!(result.is_err());
     }
 }

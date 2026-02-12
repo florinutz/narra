@@ -78,58 +78,6 @@ impl From<String> for ToolError {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_not_found_classification() {
-        let err = ToolError::from("Character 'alice' not found".to_string());
-        assert_eq!(err.error_code, "NOT_FOUND");
-        assert!(err.suggestion.contains("entity ID"));
-        assert!(err.example.is_some());
-    }
-
-    #[test]
-    fn test_invalid_params_classification() {
-        let err = ToolError::from("Invalid entity type: foobar".to_string());
-        assert_eq!(err.error_code, "INVALID_PARAMS");
-    }
-
-    #[test]
-    fn test_constraint_violation_classification() {
-        let err = ToolError::from("CRITICAL: Universe fact prohibits this action".to_string());
-        assert_eq!(err.error_code, "CONSTRAINT_VIOLATION");
-        assert!(err.suggestion.contains("universe fact"));
-    }
-
-    #[test]
-    fn test_validation_error_classification() {
-        let err = ToolError::from("Validation failed: name is required".to_string());
-        assert_eq!(err.error_code, "VALIDATION_ERROR");
-    }
-
-    #[test]
-    fn test_batch_failed_classification() {
-        let err = ToolError::from("All 3 knowledge entries failed: err1; err2".to_string());
-        assert_eq!(err.error_code, "BATCH_FAILED");
-    }
-
-    #[test]
-    fn test_internal_error_fallback() {
-        let err = ToolError::from("Something unexpected happened".to_string());
-        assert_eq!(err.error_code, "INTERNAL_ERROR");
-        assert_eq!(err.message, "Something unexpected happened");
-    }
-
-    #[test]
-    fn test_into_contents_produces_json() {
-        let err = ToolError::from("Entity not found".to_string());
-        let contents = err.into_contents();
-        assert_eq!(contents.len(), 1);
-    }
-}
-
 impl From<NarraError> for ErrorData {
     fn from(err: NarraError) -> Self {
         match err {
@@ -195,5 +143,57 @@ impl From<NarraError> for ErrorData {
                 })),
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_not_found_classification() {
+        let err = ToolError::from("Character 'alice' not found".to_string());
+        assert_eq!(err.error_code, "NOT_FOUND");
+        assert!(err.suggestion.contains("entity ID"));
+        assert!(err.example.is_some());
+    }
+
+    #[test]
+    fn test_invalid_params_classification() {
+        let err = ToolError::from("Invalid entity type: foobar".to_string());
+        assert_eq!(err.error_code, "INVALID_PARAMS");
+    }
+
+    #[test]
+    fn test_constraint_violation_classification() {
+        let err = ToolError::from("CRITICAL: Universe fact prohibits this action".to_string());
+        assert_eq!(err.error_code, "CONSTRAINT_VIOLATION");
+        assert!(err.suggestion.contains("universe fact"));
+    }
+
+    #[test]
+    fn test_validation_error_classification() {
+        let err = ToolError::from("Validation failed: name is required".to_string());
+        assert_eq!(err.error_code, "VALIDATION_ERROR");
+    }
+
+    #[test]
+    fn test_batch_failed_classification() {
+        let err = ToolError::from("All 3 knowledge entries failed: err1; err2".to_string());
+        assert_eq!(err.error_code, "BATCH_FAILED");
+    }
+
+    #[test]
+    fn test_internal_error_fallback() {
+        let err = ToolError::from("Something unexpected happened".to_string());
+        assert_eq!(err.error_code, "INTERNAL_ERROR");
+        assert_eq!(err.message, "Something unexpected happened");
+    }
+
+    #[test]
+    fn test_into_contents_produces_json() {
+        let err = ToolError::from("Entity not found".to_string());
+        let contents = err.into_contents();
+        assert_eq!(contents.len(), 1);
     }
 }

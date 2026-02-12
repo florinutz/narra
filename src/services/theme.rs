@@ -250,6 +250,53 @@ impl ThemeService for LocalThemeService {
 }
 
 // ============================================================================
+// No-op service (for tests / graceful degradation)
+// ============================================================================
+
+/// No-op theme service for testing.
+pub struct NoopThemeService;
+
+impl Default for NoopThemeService {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl NoopThemeService {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+#[async_trait]
+impl ThemeService for NoopThemeService {
+    async fn get_themes(
+        &self,
+        _entity_id: &str,
+        _text: &str,
+        _themes: Option<&[String]>,
+    ) -> Result<ThemeOutput, NarraError> {
+        Err(NarraError::Database(
+            "Theme service is not available (noop)".to_string(),
+        ))
+    }
+
+    async fn classify_themes(
+        &self,
+        _text: &str,
+        _themes: Option<&[String]>,
+    ) -> Result<ThemeOutput, NarraError> {
+        Err(NarraError::Database(
+            "Theme service is not available (noop)".to_string(),
+        ))
+    }
+
+    fn is_available(&self) -> bool {
+        false
+    }
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 
@@ -348,7 +395,7 @@ mod tests {
 
     #[test]
     fn test_noop_theme_service_default() {
-        let service = NoopThemeService::default();
+        let service = NoopThemeService;
         assert!(!service.is_available());
     }
 
@@ -441,48 +488,5 @@ mod tests {
     fn test_default_narrative_themes_not_empty() {
         assert!(!DEFAULT_NARRATIVE_THEMES.is_empty());
         assert!(DEFAULT_NARRATIVE_THEMES.len() >= 15);
-    }
-}
-
-/// No-op theme service for testing.
-pub struct NoopThemeService;
-
-impl Default for NoopThemeService {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl NoopThemeService {
-    pub fn new() -> Self {
-        Self
-    }
-}
-
-#[async_trait]
-impl ThemeService for NoopThemeService {
-    async fn get_themes(
-        &self,
-        _entity_id: &str,
-        _text: &str,
-        _themes: Option<&[String]>,
-    ) -> Result<ThemeOutput, NarraError> {
-        Err(NarraError::Database(
-            "Theme service is not available (noop)".to_string(),
-        ))
-    }
-
-    async fn classify_themes(
-        &self,
-        _text: &str,
-        _themes: Option<&[String]>,
-    ) -> Result<ThemeOutput, NarraError> {
-        Err(NarraError::Database(
-            "Theme service is not available (noop)".to_string(),
-        ))
-    }
-
-    fn is_available(&self) -> bool {
-        false
     }
 }
