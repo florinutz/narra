@@ -54,7 +54,7 @@ pub fn download_model(repo_id: &str, _cache_dir: Option<&Path>) -> Result<ModelF
 /// is enabled. Probes layer-norm support since BERT/RoBERTa require it —
 /// falls back to CPU if the GPU backend lacks the kernel.
 pub fn select_device() -> Device {
-    #[cfg(feature = "metal")]
+    #[cfg(target_os = "macos")]
     {
         if let Ok(device) = Device::new_metal(0) {
             if probe_layer_norm(&device) {

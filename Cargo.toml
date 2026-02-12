@@ -51,10 +51,14 @@ tokio-stream = "0.1"
 async-stream = "0.3"
 
 [features]
-default = ["metal"]
+default = []
 metal = ["candle-core/metal"]
 cuda = ["candle-core/cuda"]
 surrealdb3 = []
+
+# Auto-enable Metal acceleration on macOS
+[target.'cfg(target_os = "macos")'.dependencies]
+candle-core = { version = "0.9", features = ["metal"] }
 
 [profile.release]
 codegen-units = 1
